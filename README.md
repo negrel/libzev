@@ -1,14 +1,40 @@
-# `subpoll` - Submit then poll asynchronous I/O library.
+# `libzev` - Cross platform event loop.
 
-`subpoll` is a cross platform event loop with a dead simple API: submit then
-poll.
+`libzev` is a cross platform event loop inspired by `io_uring`. It works using
+2 fixed size ring buffers, one to submit I/O operations and one to retrieve
+I/O completions.
+
+It works as follow:
+* You prepare I/O operations by adding them to the submission queue (SQ)
+* You submit the SQ
+* You wait for I/O completions to be added to the completion queue (CQ)
+* You process the results
+
+```
+                             libzev                             
+          +-----------------------------------------+           
+         add                                     consume        
+         I/O                                       I/O          
+      operation         submit then poll        completion      
++-----+   |    +----+        +----+        +----+   |    +-----+
+| App +---|--->| SQ +------->| Io +------->| CQ +---|--->| App |
++-----+   |    +----+        +----+        +----+   |    +-----+
+          |                                         |           
+          +-----------------------------------------+           
+```
+
+## Goals
+
+My goal for `libzev` is to produce a production-quality, permissively licensed,
+`io_uring` like event loop library for Zig and C. It's main purpose is to enable
+__parallelized I/O__ with a focus on __usability__ and __correctness__.
 
 ## Contributing
 
-If you want to contribute to `subpoll` to add a feature or improve the code
+If you want to contribute to `libzev` to add a feature or improve the code
 contact me at [alexandre@negrel.dev](mailto:alexandre@negrel.dev), open an
-[issue](https://github.com/negrel/subpoll/issues) or make a
-[pull request](https://github.com/negrel/subpoll/pulls).
+[issue](https://github.com/negrel/libzev/issues) or make a
+[pull request](https://github.com/negrel/libzev/pulls).
 
 ## :stars: Show your support
 
