@@ -5,6 +5,7 @@ pub const Type = enum {
     sleep,
     cancel,
     open_file,
+    pread,
 };
 
 /// State enumerates possible I/O operation's state.
@@ -20,12 +21,14 @@ pub const Result = union(Type) {
             .sleep => error{CancelError}!void,
             .cancel => error{OperationDone}!void,
             .open_file => (std.fs.File.OpenError || error{CancelError})!std.fs.File,
+            .pread => (std.fs.File.PReadError || error{CancelError})!usize,
         };
     }
 
     sleep: of(.sleep),
     cancel: of(.cancel),
     open_file: of(.open_file),
+    pread: of(.pread),
 };
 
 pub const Data = union(Type) {
@@ -49,9 +52,15 @@ pub const Data = union(Type) {
                 dir: std.fs.Dir,
                 sub_path: []const u8,
                 flags: std.fs.File.OpenFlags,
-
                 result: Result.of(.open_file) = undefined,
                 callback: callback(.open_file),
+            },
+            .pread => struct {
+                f: std.fs.File,
+                buf: []u8,
+                offset: u64,
+                result: Result.of(.pread) = undefined,
+                callback: callback(.pread),
             },
         };
     }
@@ -59,4 +68,5 @@ pub const Data = union(Type) {
     sleep: of(.sleep),
     cancel: of(.cancel),
     open_file: of(.open_file),
+    pread: of(.pread),
 };

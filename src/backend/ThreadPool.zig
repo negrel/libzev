@@ -157,9 +157,7 @@ pub const Operation = struct {
                         data.ms,
                         std.time.ns_per_ms,
                     ) catch std.math.maxInt(usize));
-                    if (!state.try_terminate()) { // cancelled.
-                        return;
-                    }
+                    if (!state.try_terminate()) return; // cancelled.
                 },
                 .cancel => |data| {
                     const op: *Operation = @ptrCast(@alignCast(data.op));
@@ -199,6 +197,18 @@ pub const Operation = struct {
                         }
                         return;
                     }
+                },
+                .pread => |data| {
+                    const result = data.f.pread(data.buf, data.offset);
+                    if (state.try_terminate()) {
+                        self.data.pread = .{
+                            .f = data.f,
+                            .buf = data.buf,
+                            .offset = data.offset,
+                            .result = result,
+                            .callback = data.callback,
+                        };
+                    } else return;
                 },
             }
         }
@@ -558,4 +568,55 @@ test "schedule cancelled open file" {
 
         try std.testing.expect(done >= 2);
     }
+}
+
+test "open then read file" {
+    const S = struct {
+        var b: Self = undefined;
+        var pread: Operation = undefined;
+        var buf: [1028]u8 = undefined;
+        var read: usize = 0;
+
+        fn openFileCallback(
+            _: *anyopaque,
+            data: operation.Data.of(.open_file),
+        ) void {
+            const f = data.result catch unreachable;
+            pread = .init(.{ .pread = .{
+                .f = f,
+                .buf = buf[0..buf.len],
+                .offset = 0,
+                .callback = preadFileCallback,
+            } });
+            b.submit(&pread);
+        }
+        fn preadFileCallback(
+            _: *anyopaque,
+            data: operation.Data.of(.pread),
+        ) void {
+            read = data.result catch unreachable;
+        }
+    };
+
+    S.b.init();
+    defer S.b.deinit();
+
+    var fopen = Operation.init(.{ .open_file = .{
+        .dir = std.fs.cwd(),
+        .sub_path = "./src/testdata/file.txt",
+        .flags = .{ .mode = .read_only },
+        .callback = &S.openFileCallback,
+    } });
+
+    S.b.submit(&fopen);
+
+    var done: usize = 0;
+    var iter: usize = 0;
+    while (@max(done, iter) != 2) {
+        done += S.b.poll();
+        iter += 1;
+    }
+
+    try std.testing.expect(done == 2);
+    try std.testing.expectEqualStrings("Hello from text file!\n", S.buf[0..S.read]);
 }
