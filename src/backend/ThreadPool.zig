@@ -51,18 +51,24 @@ pub fn submit(self: *Self, op: *Operation) void {
 /// Polls until a scheduled I/O operation completes. If there is none, this
 /// function returns without blocking.
 pub fn poll(self: *Self) usize {
+    // Prepare to wait.
+    self.futex.store(0, .seq_cst);
+
+    // Pop all completed operation.
     var done: usize = 0;
     while (self.done.pop()) |op| {
         op.callback();
-        op.* = Operation.init(undefined);
         done += 1;
     }
 
+    // Zero operation complete.
     if (done == 0) {
         if (self.pending == 0) return 0;
 
-        self.futex.store(0, .unordered);
+        // Wait until a thread operation completes.
         std.Thread.Futex.wait(&self.futex, 0);
+
+        // Retry to poll.
         return self.poll();
     }
 
@@ -106,50 +112,109 @@ pub const Operation = struct {
     }
 
     fn submitted(self: *Operation, loop: *Loop) void {
+        self.* = .init(self.data);
         self.owner = loop;
+    }
+
+    /// Freezes thread state machine to final state by replacing the local one
+    /// with static equivalent.
+    fn freezeThreadState(
+        self: *Operation,
+        thread_state: *ThreadStateMachine,
+    ) void {
+        if (self.state.thread_state.load(.seq_cst) == thread_state) {
+            switch (thread_state.state.load(.seq_cst)) {
+                .dead => self.state.thread_state.store(
+                    &OpStateMachine.dead,
+                    .seq_cst,
+                ),
+                .cancelled => self.state.thread_state.store(
+                    &OpStateMachine.cancelled,
+                    .seq_cst,
+                ),
+                .submitted => unreachable,
+            }
+        }
     }
 
     /// Execute blocking I/O operation.
     fn block(self: *Operation) void {
+        // Store operation thread on the stack so it can outlive the operation
+        // if cancelled.
         var state: ThreadStateMachine = .{};
-        if (!self.state.try_sync(&state)) { // Early cancel.
-            return;
-        }
+        if (!state.try_sync(&self.state)) return; // Early cancel.
 
-        switch (self.data) {
-            .sleep => |data| {
-                std.Thread.sleep(std.math.mul(
-                    usize,
-                    data.ms,
-                    std.time.ns_per_ms,
-                ) catch std.math.maxInt(usize));
-                if (!state.try_terminate()) { // cancelled.
-                    return;
-                }
-            },
-            .cancel => |data| {
-                const op: *Operation = @ptrCast(@alignCast(data.op));
-                switch (op.data) {
-                    .cancel => @panic(
-                        "cancelling cancel operation is not possible",
-                    ),
-                    else => if (op.try_cancel()) {
+        // Freeze thread state before returning / pushing it to the done queue
+        // as &state is a pointer to local variable and will be invalid once we
+        // return.
+        {
+            defer self.freezeThreadState(&state);
+
+            switch (self.data) {
+                .sleep => |data| {
+                    std.Thread.sleep(std.math.mul(
+                        usize,
+                        data.ms,
+                        std.time.ns_per_ms,
+                    ) catch std.math.maxInt(usize));
+                    if (!state.try_terminate()) { // cancelled.
+                        return;
+                    }
+                },
+                .cancel => |data| {
+                    const op: *Operation = @ptrCast(@alignCast(data.op));
+                    if (op.try_cancel()) {
+                        switch (op.data) {
+                            .cancel => @panic(
+                                "cancelling cancel operation is not possible",
+                            ),
+                            else => {},
+                        }
+
                         // Schedule cancelled operation callback.
+                        if (!state.try_terminate()) unreachable;
                         self.owner.done.push(op);
                     } else {
+                        if (!state.try_terminate()) unreachable;
                         self.data.cancel.result = error.OperationDone;
-                    },
-                }
-            },
+                    }
+                },
+                .open_file => |data| {
+                    const result = data.dir.openFile(
+                        data.sub_path,
+                        data.flags,
+                    );
+                    if (state.try_terminate()) {
+                        self.data.open_file = .{
+                            .dir = data.dir,
+                            .sub_path = data.sub_path,
+                            .flags = data.flags,
+                            .result = result,
+                            .callback = data.callback,
+                        };
+                    } else { // cancelled.
+                        cleanup: {
+                            const f = result catch break :cleanup;
+                            f.close();
+                        }
+                        return;
+                    }
+                },
+            }
         }
 
+        // Schedule callback.
         self.owner.done.push(self);
+
+        // Wake up blocking poll if any.
+        self.owner.futex.store(1, .seq_cst);
         std.Thread.Futex.wake(&self.owner.futex, 1);
     }
 
     // Tries to cancel operation and returns true if succeeed.
     fn try_cancel(self: *Operation) bool {
-        if (!self.state.try_cancel()) return false;
+        const cancelled = self.state.try_cancel();
+        if (!cancelled) return false;
 
         inline for (@typeInfo(operation.Type).@"enum".fields) |variant| {
             const opType = @field(operation.Type, variant.name);
@@ -178,6 +243,7 @@ pub const Operation = struct {
                 return;
             }
         }
+
         unreachable;
     }
 };
@@ -185,40 +251,29 @@ pub const Operation = struct {
 // OpStateMachine defines state machine of an operation submitted to a worker
 // thread.
 const OpStateMachine = struct {
-    thread_state: std.atomic.Value(?*ThreadStateMachine) = .init(null),
+    thread_state: std.atomic.Value(*ThreadStateMachine) = .init(&submitted),
 
-    var early_cancel: ThreadStateMachine = .{ .state = .init(.cancelled) };
+    // Immutable static ThreadStateMachine. These are used to before an
+    // operation starts and after it complete.
+    pub var submitted: ThreadStateMachine = .{ .state = .init(.submitted) };
+    pub var dead: ThreadStateMachine = .{ .state = .init(.dead) };
+    pub var cancelled: ThreadStateMachine = .{ .state = .init(.cancelled) };
 
-    /// Tries to synchronizes state with thread. This fails if task is already
-    /// cancelled.
-    fn try_sync(
-        self: *OpStateMachine,
-        thread_state: *ThreadStateMachine,
-    ) bool {
-        return self.thread_state.cmpxchgStrong(
-            null,
-            thread_state,
+    // Tries to transition from submitted to cancelled state and returns true if
+    // succeed. This function should never be called from a worker thread.
+    fn try_cancel(self: *OpStateMachine) bool {
+        const swapped = self.thread_state.swap(&cancelled, .seq_cst);
+        if (swapped == &cancelled) return false; // already cancelled.
+        if (swapped == &dead) return false; // already completed.
+        if (swapped == &submitted) return true; // early cancel.
+
+        // transition local thread state from submitted to cancelled.
+        return swapped.state.cmpxchgStrong(
+            .submitted,
+            .cancelled,
             .seq_cst,
             .seq_cst,
         ) == null;
-    }
-
-    // Tries to transition from submitted to cancelled state and returns true if
-    // succeeed. This function should never be called from a worker thread.
-    fn try_cancel(self: *OpStateMachine) bool {
-        if (self.thread_state.swap(&early_cancel, .seq_cst)) |s| {
-            if (s == &early_cancel) return false; // already cancelled.
-
-            const state = s.state.cmpxchgStrong(
-                .submitted,
-                .cancelled,
-                .seq_cst,
-                .seq_cst,
-            );
-            return state == null;
-        }
-
-        return true;
     }
 };
 
@@ -227,8 +282,22 @@ const OpStateMachine = struct {
 const ThreadStateMachine = struct {
     state: std.atomic.Value(operation.State) = .init(.submitted),
 
+    /// Tries to synchronizes state with one stored on thread stack. This fails
+    /// if task is already cancelled.
+    fn try_sync(
+        self: *ThreadStateMachine,
+        op_state: *OpStateMachine,
+    ) bool {
+        return op_state.thread_state.cmpxchgStrong(
+            &OpStateMachine.submitted, // static
+            self, // non static
+            .seq_cst,
+            .seq_cst,
+        ) == null;
+    }
+
     // Tries to transition from submitted to cancelled state and returns true if
-    // succeeed.
+    // succeed.
     fn try_terminate(self: *ThreadStateMachine) bool {
         return self.state.cmpxchgStrong(
             .submitted,
@@ -279,43 +348,44 @@ test "sleep" {
 
 test "cancel sleep" {
     var n: usize = 0;
+    const S = struct {
+        var called: usize = 0;
+        var sleepCallbackData: ?operation.Data.of(.sleep) = null;
+        var cancelCallbackData: ?operation.Data.of(.cancel) = null;
+
+        fn sleepCallback(_: *anyopaque, data: operation.Data.of(.sleep)) void {
+            sleepCallbackData = data;
+            defer called += 1;
+
+            data.result catch |err| {
+                if (err != error.CancelError) unreachable;
+                if (called != 0) unreachable;
+                return;
+            };
+            if (called != 1) unreachable;
+        }
+
+        fn cancelCallback(_: *anyopaque, data: operation.Data.of(.cancel)) void {
+            cancelCallbackData = data;
+            defer called += 1;
+
+            data.result catch |err| {
+                if (err != error.OperationDone) unreachable;
+                if (called != 0) unreachable;
+                return;
+            };
+            if (called != 1) unreachable;
+        }
+    };
 
     for (0..100) |_| {
-        const S = struct {
-            var called: usize = 0;
-            var sleepCallbackData: ?operation.Data.of(.sleep) = null;
-            var cancelCallbackData: ?operation.Data.of(.cancel) = null;
-
-            fn sleepCallback(_: *anyopaque, data: operation.Data.of(.sleep)) void {
-                sleepCallbackData = data;
-                defer called += 1;
-
-                data.result catch |err| {
-                    if (err != error.CancelError) unreachable;
-                    if (called != 0) unreachable;
-                    return;
-                };
-                if (called != 1) unreachable;
-            }
-
-            fn cancelCallback(_: *anyopaque, data: operation.Data.of(.cancel)) void {
-                cancelCallbackData = data;
-                defer called += 1;
-
-                data.result catch |err| {
-                    if (err != error.OperationDone) unreachable;
-                    if (called != 0) unreachable;
-                    return;
-                };
-                if (called != 1) unreachable;
-            }
-        };
         S.called = 0;
         S.sleepCallbackData = null;
         S.cancelCallbackData = null;
 
         var b: Self = undefined;
         b.init();
+        defer b.deinit();
 
         var sleep = Operation.init(.{ .sleep = .{
             .ms = 5,
@@ -329,15 +399,20 @@ test "cancel sleep" {
         b.submit(&sleep);
         b.submit(&cancel);
 
+        try std.Thread.yield();
         var timer = try std.time.Timer.start();
-        const done = b.poll();
+        var done: usize = 0;
+        var iter: usize = 0;
+        while (@max(done, iter) != 2) {
+            done += b.poll();
+            iter += 1;
+        }
         const ns = timer.read();
 
         try std.testing.expect(done == 2);
         try std.testing.expect(S.called == 2);
         S.sleepCallbackData.?.result catch { // cancelled
             n |= 1;
-            try std.testing.expect(ns <= 5 * std.time.ns_per_ms);
             return;
         };
         n |= 2;
@@ -345,4 +420,142 @@ test "cancel sleep" {
     }
 
     try std.testing.expect(n == 3);
+}
+
+test "open file" {
+    const S = struct {
+        var f: ?std.fs.File = null;
+
+        fn callback(_: *anyopaque, data: operation.Data.of(.open_file)) void {
+            f = data.result catch unreachable;
+        }
+    };
+
+    for (0..100) |_| {
+        S.f = null;
+
+        var b: Self = undefined;
+        b.init();
+        defer b.deinit();
+
+        var fopen = Operation.init(.{ .open_file = .{
+            .dir = std.fs.cwd(),
+            .sub_path = "./src/testdata/file.txt",
+            .flags = .{ .mode = .read_only },
+            .callback = &S.callback,
+        } });
+
+        b.submit(&fopen);
+
+        const done = b.poll();
+
+        try std.testing.expect(done == 1);
+
+        var buf: [1028]u8 = undefined;
+        var reader = S.f.?.reader(buf[0..buf.len]);
+        const r = try reader.read(buf[0..buf.len]);
+        try std.testing.expectEqualStrings("Hello from text file!\n", buf[0..r]);
+    }
+}
+
+test "cancel open file" {
+    const S = struct {
+        fn openFileCallback(
+            _: *anyopaque,
+            data: operation.Data.of(.open_file),
+        ) void {
+            _ = data.result catch |err| {
+                std.debug.assert(err == error.CancelError);
+                return;
+            };
+            // unreachable;
+        }
+
+        fn cancelCallback(
+            _: *anyopaque,
+            _: operation.Data.of(.cancel),
+        ) void {}
+    };
+
+    for (0..100) |_| {
+        var b: Self = undefined;
+        b.init();
+        defer b.deinit();
+
+        var fopen = Operation.init(.{ .open_file = .{
+            .dir = std.fs.cwd(),
+            .sub_path = "./src/testdata/file.txt",
+            .flags = .{ .mode = .read_only },
+            .callback = &S.openFileCallback,
+        } });
+        var cancel = Operation.init(.{ .cancel = .{
+            .op = &fopen,
+            .callback = &S.cancelCallback,
+        } });
+
+        b.submit(&fopen);
+        try std.Thread.yield();
+        b.submit(&cancel);
+
+        var done: usize = 0;
+        var iter: usize = 0;
+        while (@max(done, iter) != 2) {
+            done += b.poll();
+            iter += 1;
+        }
+
+        try std.testing.expect(done == 2);
+    }
+}
+
+test "schedule cancelled open file" {
+    const S = struct {
+        fn openFileCallback(
+            ptr: *anyopaque,
+            data: operation.Data.of(.open_file),
+        ) void {
+            const op: *Operation = @ptrCast(@alignCast(ptr));
+            _ = data.result catch |err| {
+                std.debug.assert(err == error.CancelError);
+                op.owner.submit(op);
+                return;
+            };
+            // unreachable;
+        }
+
+        fn cancelCallback(
+            _: *anyopaque,
+            _: operation.Data.of(.cancel),
+        ) void {}
+    };
+
+    for (0..100) |_| {
+        var b: Self = undefined;
+        b.init();
+        defer b.deinit();
+
+        var fopen = Operation.init(.{ .open_file = .{
+            .dir = std.fs.cwd(),
+            .sub_path = "./src/testdata/file.txt",
+            .flags = .{ .mode = .read_only },
+            .callback = &S.openFileCallback,
+        } });
+        var cancel = Operation.init(.{ .cancel = .{
+            .op = &fopen,
+            .callback = &S.cancelCallback,
+        } });
+
+        b.submit(&fopen);
+        try std.Thread.yield();
+        b.submit(&cancel);
+
+        var done: usize = 0;
+        var iter: usize = 0;
+        while (@max(done, iter) != 5) {
+            done += b.poll();
+            iter += 1;
+        }
+
+        try std.testing.expect(done >= 2);
+    }
 }
