@@ -43,36 +43,36 @@ pub fn Intrusive(comptime T: type) type {
         /// Push an item onto the queue. This can be called by any number
         /// of producers.
         pub fn push(self: *Self, v: *T) void {
-            @atomicStore(?*T, &v.next, null, .unordered);
-            const prev = @atomicRmw(*T, &self.head, .Xchg, v, .acq_rel);
-            @atomicStore(?*T, &prev.next, v, .release);
+            @atomicStore(?*T, &v.next, null, .seq_cst);
+            const prev = @atomicRmw(*T, &self.head, .Xchg, v, .seq_cst);
+            @atomicStore(?*T, &prev.next, v, .seq_cst);
         }
 
         /// Pop the first in element from the queue. This must be called
         /// by only a single consumer at any given time.
         pub fn pop(self: *Self) ?*T {
-            var tail = @atomicLoad(*T, &self.tail, .unordered);
-            var next_ = @atomicLoad(?*T, &tail.next, .acquire);
+            var tail = @atomicLoad(*T, &self.tail, .seq_cst);
+            var next_ = @atomicLoad(?*T, &tail.next, .seq_cst);
             if (tail == &self.stub) {
                 const next = next_ orelse return null;
-                @atomicStore(*T, &self.tail, next, .unordered);
+                @atomicStore(*T, &self.tail, next, .seq_cst);
                 tail = next;
-                next_ = @atomicLoad(?*T, &tail.next, .acquire);
+                next_ = @atomicLoad(?*T, &tail.next, .seq_cst);
             }
 
             if (next_) |next| {
-                @atomicStore(*T, &self.tail, next, .release);
+                @atomicStore(*T, &self.tail, next, .seq_cst);
                 tail.next = null;
                 return tail;
             }
 
-            const head = @atomicLoad(*T, &self.head, .unordered);
+            const head = @atomicLoad(*T, &self.head, .seq_cst);
             if (tail != head) return null;
             self.push(&self.stub);
 
-            next_ = @atomicLoad(?*T, &tail.next, .acquire);
+            next_ = @atomicLoad(?*T, &tail.next, .seq_cst);
             if (next_) |next| {
-                @atomicStore(*T, &self.tail, next, .unordered);
+                @atomicStore(*T, &self.tail, next, .seq_cst);
                 tail.next = null;
                 return tail;
             }
@@ -129,8 +129,8 @@ test "multi thread" {
         next: ?*Self = null,
     };
     const Queue = Intrusive(Elem);
-    var q: Queue = undefined;
-    q.init();
+    var queue: Queue = undefined;
+    queue.init();
 
     var elems: [threads_count * iter_count]Elem = undefined;
     var threads: [threads_count]std.Thread = undefined;
@@ -138,32 +138,39 @@ test "multi thread" {
 
     for (0..threads_count) |i| {
         threads[i] = try std.Thread.spawn(.{}, struct {
-            fn worker(queue: *Queue, els: []Elem, count: *std.atomic.Value(u32)) void {
-                var qq = queue;
+            fn worker(
+                _queue: *Queue,
+                els: []Elem,
+                count: *std.atomic.Value(u32),
+            ) void {
+                var q = _queue;
                 for (0..els.len) |j| {
-                    qq.push(&els[j]);
+                    els[j] = .{};
+                    q.push(&els[j]);
                 }
 
                 _ = count.fetchAdd(@intCast(els.len), .seq_cst);
             }
-        }.worker, .{ &q, elems[i * iter_count .. (i + 1) * iter_count], &pushed });
+        }.worker, .{
+            &queue,
+            elems[i * iter_count .. (i + 1) * iter_count],
+            &pushed,
+        });
     }
 
     var start = try std.time.Timer.start();
     var popped: usize = 0;
-    while (popped < threads_count * iter_count and start.read() <= std.time.ns_per_s) {
-        const count = pushed.load(.seq_cst) - popped;
-
-        if (count == 0) {
-            std.Thread.yield() catch {};
-            continue;
+    while (popped < threads_count * iter_count and
+        start.read() <= std.time.ns_per_s)
+    {
+        while (queue.pop()) |_| {
+            popped += 1;
+            if (popped % 1000 == 0) break;
         }
+    }
 
-        for (0..count) |_| {
-            try std.testing.expect(q.pop() != null);
-        }
-
-        popped += count;
+    for (0..threads_count) |i| {
+        threads[i].join();
     }
 
     try std.testing.expect(popped == threads_count * iter_count);
