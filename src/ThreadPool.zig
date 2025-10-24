@@ -827,3 +827,52 @@ const Node = struct {
         }
     };
 };
+
+test "ThreadPool" {
+    const Static = struct {
+        var done: std.atomic.Value(u32) = .init(0);
+
+        fn callback(_: *ThreadPool.Task) void {
+            std.Thread.yield() catch {};
+            _ = done.fetchAdd(1, .seq_cst);
+        }
+    };
+
+    var tpool = ThreadPool.init(.{});
+    defer {
+        tpool.shutdown();
+        tpool.deinit();
+    }
+
+    var tasks = [_]ThreadPool.Task{.{ .callback = undefined }} ** 128;
+
+    // Schedule 16 tasks separately.
+    for (0..16) |i| {
+        const task = &tasks[i];
+        task.* = .{ .callback = Static.callback };
+
+        const batch = ThreadPool.Batch.from(task);
+        tpool.schedule(batch);
+    }
+
+    // Schedule batch of 16 tasks.
+    var batch: ThreadPool.Batch = .{};
+    for (16..128) |i| {
+        const task = &tasks[i];
+        task.* = .{ .callback = Static.callback };
+
+        batch.push(ThreadPool.Batch.from(task));
+
+        if (i % 16 == 0 or i == tasks.len - 1) {
+            tpool.schedule(batch);
+            batch = .{};
+        }
+    }
+
+    for (0..1000) |_| {
+        if (Static.done.load(.seq_cst) == tasks.len) break;
+        std.Thread.sleep(std.time.ns_per_ms);
+    }
+
+    try std.testing.expect(Static.done.load(.seq_cst) == tasks.len);
+}

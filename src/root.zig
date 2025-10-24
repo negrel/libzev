@@ -1,124 +1,160 @@
 const std = @import("std");
 
-pub const Backend = @import("./backend.zig");
+const impl = @import("./impl.zig");
 
-test {
-    _ = Backend;
+fn forEachAvailableImpl(tcase: anytype) !void {
+    inline for (impl.Impl.available()) |i| {
+        try @call(.auto, tcase, .{i.Impl()});
+    }
 }
 
-// const TPool = @import("./ThreadPool.zig");
-// const queue_mpsc = @import("./queue_mpsc.zig");
-//
-// /// A submit and poll asynchronous I/O event loop.
-// pub const Loop = struct {
-//     backend: Backend.Impl,
-//
-//     fn init() Loop {
-//         const self: Loop = .{ .backend = Backend.init() };
-//         return self;
-//     }
-//
-//     fn deinit(self: *Loop) void {
-//         self.backend.deinit();
-//     }
-//
-//     /// Submits an asynchronous I/O operations.
-//     fn submit(self: *Loop, op: *Operation) void {
-//         std.debug.assert(op.state == .dead);
-//         op.state = .submitted;
-//     }
-//
-//     /// Poll until an asynchronous I/O operation completes.
-//     fn poll(self: *Loop) void {
-//         if (self.active == 0) return;
-//     }
-// };
-//
-// /// An asynchronous I/O operation.
-// pub const Operation = struct {
-//     /// BackendData holds operation data depending on backend.
-//     const BackendData = union {
-//         thread_pool: struct {
-//             const ThreadPoolData = @This();
-//
-//             task: TPool.Task = .{
-//                 .callback = struct {
-//                     pub fn cb(t: *TPool.Task) void {
-//                         const tpd: *ThreadPoolData = @fieldParentPtr("task", t);
-//                         const op: *Operation = @fieldParentPtr("bdata", tpd);
-//                         op.sync();
-//                         op.loop.backend.done.push(op);
-//                     }
-//                 }.cb,
-//             },
-//         },
-//     };
-//
-//     // UAIO owner.
-//     loop: *Loop = undefined,
-//
-//     // Operation state.
-//     state: State = .dead,
-//
-//     // Backend data.
-//     bdata: BackendData = .{},
-//
-//     // Operation data.
-//     data: Data,
-//
-//     // Callback executed after completion.
-//     callback: *const fn (_: *Loop, _: *Operation) void,
-// };
-//
-// /// Backend is the underlying implementation of interface:
-// /// {
-// ///   fn submit(*Self, *Operation) void
-// ///   fn poll(*Self) void
-// /// }
-// const Backend = enum {
-//     thread_pool,
-//
-//     const Impl = union(Backend) {
-//         thread_pool: struct {
-//             const Self = @This();
-//
-//             // Number of pending operations.
-//             pending: usize = 0,
-//
-//             // Thread pool and done queue.
-//             tpool: TPool = .{},
-//             done: queue_mpsc.Intrusive(Operation) = .{},
-//
-//             // Futex to wake up blocking poll.
-//             futex: std.Thread.Futex,
-//             futex_v: std.atomic.Value(u32),
-//
-//             fn submit(self: *Self, op: *Operation) void {
-//                 const batch = TPool.Batch.from(op.bdata);
-//                 self.tpool.schedule(batch);
-//                 self.active += 1;
-//             }
-//
-//             fn poll(self: *Self, l: *Loop) void {
-//                 if (self.pending == 0) return 0;
-//
-//                 if (self.done.pop()) |op| {
-//                     op.callback(l, op);
-//                 } else {
-//                     self.futex_v.store(1, .unordered);
-//                     self.futex.wait(&self.futex_v, 1);
-//                 }
-//
-//                 while (self.done.pop()) |op| {
-//                     op.callback(l, op);
-//                 }
-//             }
-//         },
-//     };
-//
-//     const Data = union(Backend) {
-//         thread_pool: struct {
-//             const Self = @This();
-//         },
-//     };
-// };
+test "single noop" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var called: bool = undefined;
+
+                fn callback(_: *Io.Op) void {
+                    called = true;
+                }
+            };
+            Static.called = false;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            var noopOp = Io.noop(null, &Static.callback);
+            try io.submit(&noopOp);
+
+            var done: usize = 0;
+            var start = try std.time.Timer.start();
+            while (done < 1 and start.read() < std.time.ns_per_s) {
+                done += try io.poll(.one);
+            }
+
+            try std.testing.expect(done == 1);
+            try std.testing.expect(Static.called);
+        }
+    }.tcase);
+}
+
+test "batch of noop" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var called: usize = undefined;
+                fn callback(_: *Io.Op) void {
+                    called += 1;
+                }
+            };
+            Static.called = 0;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            var iops: [4096]Io.Op = undefined;
+            var batch: Io.Batch = .{};
+
+            for (0..iops.len) |i| {
+                iops[i] = Io.noop(null, &Static.callback);
+                batch.push(&iops[i]);
+            }
+            try io.submitBatch(batch);
+
+            var done: usize = 0;
+            var start = try std.time.Timer.start();
+            while (done < iops.len and start.read() < std.time.ns_per_s) {
+                done += try io.poll(.all);
+            }
+
+            try std.testing.expect(Static.called == iops.len);
+        }
+    }.tcase);
+}
+
+test "batch of timeout" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var called: usize = undefined;
+                fn callback(_: *Io.Op) void {
+                    called += 1;
+                }
+            };
+            Static.called = 0;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            var iops: [4096]Io.Op = undefined;
+            var batch: Io.Batch = .{};
+
+            for (0..iops.len) |i| {
+                iops[i] = Io.timeout(5, null, &Static.callback);
+                batch.push(&iops[i]);
+            }
+            try io.submitBatch(batch);
+
+            var done: usize = 0;
+            for (0..iops.len) |_| {
+                const polled = try io.poll(.all);
+                done += polled;
+
+                if (done >= iops.len) break;
+            }
+            try std.testing.expect(Static.called == iops.len);
+        }
+    }.tcase);
+}
+
+test "openat" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var called: bool = undefined;
+                var file: anyerror!std.fs.File = undefined;
+                fn callback(iop: *Io.Op) void {
+                    called = true;
+                    file = iop.data.openat.file;
+                }
+            };
+            Static.called = false;
+            Static.file = undefined;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            var openat = Io.openat(
+                std.fs.cwd(),
+                "./src/testdata/file.txt",
+                .{ .read = true },
+                null,
+                Static.callback,
+            );
+
+            try io.submit(&openat);
+            var done: usize = 0;
+            while (true) {
+                done = io.poll(.all) catch |err| @panic(@errorName(err));
+                if (done != 0) break;
+                try std.Thread.yield();
+            }
+
+            try std.testing.expect(done == 1);
+            try std.testing.expect(Static.called);
+
+            const f = try Static.file;
+
+            var buf: [64]u8 = undefined;
+            const read = try f.read(buf[0..buf.len]);
+            try std.testing.expectEqualStrings(
+                "Hello from text file!\n",
+                buf[0..read],
+            );
+        }
+    }.tcase);
+}
