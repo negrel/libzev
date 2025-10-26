@@ -115,6 +115,18 @@ pub fn openat(
     };
 }
 
+pub fn close(
+    f: std.fs.File,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .close = .{ .file = f } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 pub const Op = struct {
     io: *Io = undefined,
     data: union(io.OpCode) {
@@ -126,6 +138,7 @@ pub const Op = struct {
             opts: io.OpenOptions,
             file: std.fs.File.OpenError!std.fs.File = undefined,
         },
+        close: struct { file: std.fs.File },
     },
     callback: *const fn (*Op) void,
     user_data: ?*anyopaque,
@@ -177,6 +190,9 @@ pub const Op = struct {
                         .mode = mode,
                     });
                 }
+            },
+            .close => |d| {
+                d.file.close();
             },
         }
     }

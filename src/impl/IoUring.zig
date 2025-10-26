@@ -72,6 +72,7 @@ fn enqueue(self: *Self, iop: *Op) !void {
             d.flags,
             d.mode,
         ),
+        .close => |d| sqe.prep_close(d.file.handle),
     }
     sqe.user_data = @intFromPtr(iop);
 }
@@ -134,6 +135,7 @@ pub fn poll(self: *Self, mode: io.PollMode) !u32 {
                         };
                     } else op.data.openat.file = .{ .handle = cqe.res };
                 },
+                .close => {},
             }
 
             op.callback(op);
@@ -200,6 +202,18 @@ pub fn openat(
     };
 }
 
+pub fn close(
+    f: std.fs.File,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .close = .{ .file = f } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 fn msToTimespec(ms: u64) linux.kernel_timespec {
     const max: linux.kernel_timespec = .{
         .sec = std.math.maxInt(isize),
@@ -233,6 +247,7 @@ pub const Op = struct {
 
             file: std.fs.File.OpenError!std.fs.File = undefined,
         },
+        close: struct { file: std.fs.File },
     },
     callback: *const fn (*Op) void,
     user_data: ?*anyopaque,

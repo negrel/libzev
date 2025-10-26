@@ -110,51 +110,79 @@ test "batch of timeout" {
     }.tcase);
 }
 
-test "openat" {
+test "openat/close" {
     try forEachAvailableImpl(struct {
         fn tcase(Io: type) !void {
             const Static = struct {
-                var called: bool = undefined;
+                var openAtCalled: bool = undefined;
+                var closeCalled: bool = undefined;
                 var file: anyerror!std.fs.File = undefined;
-                fn callback(iop: *Io.Op) void {
-                    called = true;
+
+                fn openAtCallback(iop: *Io.Op) void {
+                    openAtCalled = true;
                     file = iop.data.openat.file;
                 }
+
+                fn closeCallback(iop: *Io.Op) void {
+                    closeCalled = true;
+                    _ = iop.data.close;
+                }
             };
-            Static.called = false;
+            Static.openAtCalled = false;
             Static.file = undefined;
 
             var io: Io = .{};
             try io.init(.{});
             defer io.deinit();
 
-            var openat = Io.openat(
-                std.fs.cwd(),
-                "./src/testdata/file.txt",
-                .{ .read = true },
-                null,
-                Static.callback,
-            );
+            // Open.
+            {
+                var openat = Io.openat(
+                    std.fs.cwd(),
+                    "./src/testdata/file.txt",
+                    .{ .read = true },
+                    null,
+                    Static.openAtCallback,
+                );
 
-            try io.submit(&openat);
-            var done: usize = 0;
-            while (true) {
-                done = io.poll(.all) catch |err| @panic(@errorName(err));
-                if (done != 0) break;
-                try std.Thread.yield();
+                try io.submit(&openat);
+
+                var done: usize = 0;
+                while (done == 0) {
+                    done = try io.poll(.all);
+                    try std.Thread.yield();
+                }
+
+                try std.testing.expect(done == 1);
+                try std.testing.expect(Static.openAtCalled);
             }
-
-            try std.testing.expect(done == 1);
-            try std.testing.expect(Static.called);
 
             const f = try Static.file;
 
-            var buf: [64]u8 = undefined;
-            const read = try f.read(buf[0..buf.len]);
-            try std.testing.expectEqualStrings(
-                "Hello from text file!\n",
-                buf[0..read],
-            );
+            // Read.
+            {
+                var buf: [64]u8 = undefined;
+                const read = try f.read(buf[0..buf.len]);
+                try std.testing.expectEqualStrings(
+                    "Hello from text file!\n",
+                    buf[0..read],
+                );
+            }
+
+            // Close.
+            {
+                var close = Io.close(f, null, Static.closeCallback);
+
+                try io.submit(&close);
+
+                var done: usize = 0;
+                while (done == 0) {
+                    done = try io.poll(.all);
+                }
+
+                try std.testing.expect(done == 1);
+                try std.testing.expect(Static.closeCalled);
+            }
         }
     }.tcase);
 }

@@ -8,6 +8,7 @@ pub const OpCode = enum(c_int) {
     noop = 0,
     timeout = 1,
     openat = 2,
+    close = 3,
 };
 
 /// open() I/O operation options.
