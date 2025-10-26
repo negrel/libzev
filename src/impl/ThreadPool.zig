@@ -99,7 +99,7 @@ pub fn timeout(
 
 pub fn openat(
     dir: std.fs.Dir,
-    path: [*c]const u8,
+    path: [:0]const u8,
     opts: io.OpenOptions,
     user_data: ?*anyopaque,
     callback: *const fn (*Op) void,
