@@ -145,29 +145,13 @@ test "openat/pread/close" {
             try io.init(.{});
             defer io.deinit();
 
-            // Open.
-            {
-                var openat = Io.openat(
-                    std.fs.cwd(),
-                    "./src/testdata/file.txt",
-                    .{ .read = true },
-                    null,
-                    Static.openAtCallback,
-                );
-
-                try io.submit(&openat);
-
-                var done: usize = 0;
-                var start = try std.time.Timer.start();
-                while (done == 0 and start.read() < std.time.ns_per_s) {
-                    done = try io.poll(.all);
-                }
-
-                try std.testing.expect(done == 1);
-                try std.testing.expect(Static.openAtCalled);
-            }
-
-            const f = try Static.file;
+            const f = try testutils.openat(
+                Io,
+                &io,
+                std.fs.cwd(),
+                "./src/testdata/file.txt",
+                .{ .read = true },
+            );
 
             // Read.
             {
@@ -191,20 +175,7 @@ test "openat/pread/close" {
             }
 
             // Close.
-            {
-                var close = Io.close(f, null, Static.closeCallback);
-
-                try io.submit(&close);
-
-                var done: usize = 0;
-                var start = try std.time.Timer.start();
-                while (done == 0 and start.read() < std.time.ns_per_s) {
-                    done = try io.poll(.all);
-                }
-
-                try std.testing.expect(done == 1);
-                try std.testing.expect(Static.closeCalled);
-            }
+            try testutils.close(Io, &io, f);
         }
     }.tcase);
 }
@@ -254,34 +225,18 @@ test "openat/pwrite/fsync/close" {
 
             const tmpDir = std.testing.tmpDir(.{});
 
-            // Open.
-            {
-                var openat = Io.openat(
-                    tmpDir.dir,
-                    "./file.txt",
-                    .{
-                        .read = true,
-                        .write = true,
-                        .create = true,
-                        .truncate = true,
-                    },
-                    null,
-                    Static.openAtCallback,
-                );
-
-                try io.submit(&openat);
-
-                var done: usize = 0;
-                var start = try std.time.Timer.start();
-                while (done == 0 and start.read() < std.time.ns_per_s) {
-                    done = try io.poll(.all);
-                }
-
-                try std.testing.expect(done == 1);
-                try std.testing.expect(Static.openAtCalled);
-            }
-
-            const f = try Static.file;
+            const f = try testutils.openat(
+                Io,
+                &io,
+                tmpDir.dir,
+                "./file.txt",
+                .{
+                    .read = true,
+                    .write = true,
+                    .create = true,
+                    .truncate = true,
+                },
+            );
 
             // Write.
             {
@@ -328,20 +283,7 @@ test "openat/pwrite/fsync/close" {
             }
 
             // Close.
-            {
-                var close = Io.close(f, null, Static.closeCallback);
-
-                try io.submit(&close);
-
-                var done: usize = 0;
-                var start = try std.time.Timer.start();
-                while (done == 0 and start.read() < std.time.ns_per_s) {
-                    done = try io.poll(.all);
-                }
-
-                try std.testing.expect(done == 1);
-                try std.testing.expect(Static.closeCalled);
-            }
+            try testutils.close(Io, &io, f);
         }
     }.tcase);
 }
@@ -424,24 +366,82 @@ test "openat/stat/close" {
                 try std.testing.expect(s.mtime > 0);
                 try std.testing.expect(s.ctime > 0);
                 try std.testing.expect(s.size == 22);
-                //try std.testing.expect(s.mode == 22);
+                //try std.testing.expect(s.mode == 0);
             }
 
             // Close.
-            {
-                var close = Io.close(f, null, Static.closeCallback);
-
-                try io.submit(&close);
-
-                var done: usize = 0;
-                var start = try std.time.Timer.start();
-                while (done == 0 and start.read() < std.time.ns_per_s) {
-                    done = try io.poll(.all);
-                }
-
-                try std.testing.expect(done == 1);
-                try std.testing.expect(Static.closeCalled);
-            }
+            try testutils.close(Io, &io, f);
         }
     }.tcase);
 }
+
+const testutils = struct {
+    const iopkg = @import("./io.zig");
+
+    fn pollAtMost1Sec(
+        Io: type,
+        io: *Io,
+    ) !usize {
+        var done: usize = 0;
+        var start = try std.time.Timer.start();
+        while (done == 0 and start.read() < std.time.ns_per_s) {
+            done = try io.poll(.all);
+        }
+
+        return done;
+    }
+
+    fn openat(
+        Io: type,
+        io: *Io,
+        dir: std.fs.Dir,
+        path: [:0]const u8,
+        opts: iopkg.OpenOptions,
+    ) !std.fs.File {
+        const Static = struct {
+            var callbackCalled: bool = undefined;
+            var file: std.fs.File.OpenError!std.fs.File = undefined;
+
+            fn openAtCallback(iop: *Io.Op) void {
+                callbackCalled = true;
+                file = iop.data.openat.file;
+            }
+        };
+        Static.callbackCalled = false;
+
+        var op = Io.openat(dir, path, opts, null, Static.openAtCallback);
+
+        try io.submit(&op);
+        const done = try pollAtMost1Sec(Io, io);
+
+        try std.testing.expect(done == 1);
+        try std.testing.expect(Static.callbackCalled);
+
+        return try Static.file;
+    }
+
+    fn close(
+        Io: type,
+        io: *Io,
+        f: std.fs.File,
+    ) !void {
+        const Static = struct {
+            var callbackCalled: bool = undefined;
+
+            fn closeCallback(iop: *Io.Op) void {
+                callbackCalled = true;
+                _ = iop.data.close;
+            }
+        };
+        Static.callbackCalled = false;
+
+        var op = Io.close(f, null, Static.closeCallback);
+
+        try io.submit(&op);
+
+        const done = try pollAtMost1Sec(Io, io);
+
+        try std.testing.expect(done == 1);
+        try std.testing.expect(Static.callbackCalled);
+    }
+};
