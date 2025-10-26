@@ -73,6 +73,7 @@ fn enqueue(self: *Self, iop: *Op) !void {
             d.mode,
         ),
         .close => |d| sqe.prep_close(d.file.handle),
+        .pread => |d| sqe.prep_read(d.file.handle, d.buffer, d.offset),
     }
     sqe.user_data = @intFromPtr(iop);
 }
@@ -98,10 +99,10 @@ pub fn poll(self: *Self, mode: io.PollMode) !u32 {
             switch (op.data) {
                 .noop => {},
                 .timeout => {},
-                .openat => {
+                .openat => |*d| {
                     if (cqe.res < 0) {
                         const rc = @as(posix.E, @enumFromInt(-cqe.res));
-                        op.data.openat.file = switch (rc) {
+                        d.file = switch (rc) {
                             .INTR => unreachable,
                             .FAULT => unreachable,
                             .INVAL => error.BadPathName,
@@ -133,9 +134,34 @@ pub fn poll(self: *Self, mode: io.PollMode) !u32 {
                                 posix.unexpectedErrno(err),
                             else => |err| posix.unexpectedErrno(err),
                         };
-                    } else op.data.openat.file = .{ .handle = cqe.res };
+                    } else d.file = .{ .handle = cqe.res };
                 },
                 .close => {},
+                .pread => |*d| {
+                    if (cqe.res < 0) {
+                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        d.read = switch (rc) {
+                            .INTR => unreachable,
+                            .INVAL => unreachable,
+                            .FAULT => unreachable,
+                            .SRCH => error.ProcessNotFound,
+                            .AGAIN => error.WouldBlock,
+                            .CANCELED => error.Canceled,
+                            // Can be a race condition.
+                            .BADF => error.NotOpenForReading,
+                            .IO => error.InputOutput,
+                            .ISDIR => error.IsDir,
+                            .NOBUFS => error.SystemResources,
+                            .NOMEM => error.SystemResources,
+                            .NOTCONN => error.SocketNotConnected,
+                            .CONNRESET => error.ConnectionResetByPeer,
+                            .TIMEDOUT => error.ConnectionTimedOut,
+                            else => |err| posix.unexpectedErrno(err),
+                        };
+                    } else {
+                        d.read = @intCast(cqe.res);
+                    }
+                },
             }
 
             op.callback(op);
@@ -214,6 +240,24 @@ pub fn close(
     };
 }
 
+pub fn pread(
+    file: std.fs.File,
+    buf: []u8,
+    offset: u64,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .pread = .{
+            .file = file,
+            .buffer = buf,
+            .offset = offset,
+        } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 fn msToTimespec(ms: u64) linux.kernel_timespec {
     const max: linux.kernel_timespec = .{
         .sec = std.math.maxInt(isize),
@@ -248,6 +292,12 @@ pub const Op = struct {
             file: std.fs.File.OpenError!std.fs.File = undefined,
         },
         close: struct { file: std.fs.File },
+        pread: struct {
+            file: std.fs.File,
+            buffer: []u8,
+            offset: u64,
+            read: std.fs.File.ReadError!usize = undefined,
+        },
     },
     callback: *const fn (*Op) void,
     user_data: ?*anyopaque,

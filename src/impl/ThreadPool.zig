@@ -127,6 +127,24 @@ pub fn close(
     };
 }
 
+pub fn pread(
+    file: std.fs.File,
+    buf: []u8,
+    offset: u64,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .pread = .{
+            .file = file,
+            .buffer = buf,
+            .offset = offset,
+        } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 pub const Op = struct {
     io: *Io = undefined,
     data: union(io.OpCode) {
@@ -139,6 +157,12 @@ pub const Op = struct {
             file: std.fs.File.OpenError!std.fs.File = undefined,
         },
         close: struct { file: std.fs.File },
+        pread: struct {
+            file: std.fs.File,
+            buffer: []u8,
+            offset: u64,
+            read: std.fs.File.PReadError!usize = undefined,
+        },
     },
     callback: *const fn (*Op) void,
     user_data: ?*anyopaque,
@@ -169,7 +193,7 @@ pub const Op = struct {
         switch (self.data) {
             .noop => {},
             .timeout => |d| std.Thread.sleep(d.ms * std.time.ns_per_ms),
-            .openat => |d| {
+            .openat => |*d| {
                 if (d.opts.create or d.opts.create_new) {
                     self.data.openat.file = d.dir.createFileZ(d.path, .{
                         .read = d.opts.read,
@@ -186,13 +210,14 @@ pub const Op = struct {
                             mode = .write_only;
                         }
                     }
-                    self.data.openat.file = d.dir.openFileZ(d.path, .{
+                    d.file = d.dir.openFileZ(d.path, .{
                         .mode = mode,
                     });
                 }
             },
-            .close => |d| {
-                d.file.close();
+            .close => |d| d.file.close(),
+            .pread => |*d| {
+                d.read = d.file.pread(d.buffer, d.offset);
             },
         }
     }

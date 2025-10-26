@@ -110,17 +110,24 @@ test "batch of timeout" {
     }.tcase);
 }
 
-test "openat/close" {
+test "openat/pread/close" {
     try forEachAvailableImpl(struct {
         fn tcase(Io: type) !void {
             const Static = struct {
                 var openAtCalled: bool = undefined;
+                var preadCalled: bool = undefined;
                 var closeCalled: bool = undefined;
                 var file: anyerror!std.fs.File = undefined;
+                var read: std.fs.File.PReadError!usize = undefined;
 
                 fn openAtCallback(iop: *Io.Op) void {
                     openAtCalled = true;
                     file = iop.data.openat.file;
+                }
+
+                fn preadCallback(iop: *Io.Op) void {
+                    preadCalled = true;
+                    read = iop.data.pread.read;
                 }
 
                 fn closeCallback(iop: *Io.Op) void {
@@ -129,7 +136,10 @@ test "openat/close" {
                 }
             };
             Static.openAtCalled = false;
+            Static.preadCalled = false;
+            Static.closeCalled = false;
             Static.file = undefined;
+            Static.read = 0;
 
             var io: Io = .{};
             try io.init(.{});
@@ -148,9 +158,9 @@ test "openat/close" {
                 try io.submit(&openat);
 
                 var done: usize = 0;
-                while (done == 0) {
+                var start = try std.time.Timer.start();
+                while (done == 0 and start.read() < std.time.ns_per_s) {
                     done = try io.poll(.all);
-                    try std.Thread.yield();
                 }
 
                 try std.testing.expect(done == 1);
@@ -162,7 +172,18 @@ test "openat/close" {
             // Read.
             {
                 var buf: [64]u8 = undefined;
-                const read = try f.read(buf[0..buf.len]);
+                var pread = Io.pread(f, buf[0..], 0, null, Static.preadCallback);
+
+                try io.submit(&pread);
+
+                var done: usize = 0;
+                var start = try std.time.Timer.start();
+                while (done == 0 and start.read() < std.time.ns_per_s) {
+                    done = try io.poll(.all);
+                }
+
+                const read = try Static.read;
+
                 try std.testing.expectEqualStrings(
                     "Hello from text file!\n",
                     buf[0..read],
@@ -176,7 +197,8 @@ test "openat/close" {
                 try io.submit(&close);
 
                 var done: usize = 0;
-                while (done == 0) {
+                var start = try std.time.Timer.start();
+                while (done == 0 and start.read() < std.time.ns_per_s) {
                     done = try io.poll(.all);
                 }
 
