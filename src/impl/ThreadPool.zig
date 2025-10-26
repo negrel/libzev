@@ -145,6 +145,24 @@ pub fn pread(
     };
 }
 
+pub fn pwrite(
+    file: std.fs.File,
+    buf: []const u8,
+    offset: u64,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .pwrite = .{
+            .file = file,
+            .buffer = buf,
+            .offset = offset,
+        } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 pub const Op = struct {
     io: *Io = undefined,
     data: union(io.OpCode) {
@@ -162,6 +180,12 @@ pub const Op = struct {
             buffer: []u8,
             offset: u64,
             read: std.fs.File.PReadError!usize = undefined,
+        },
+        pwrite: struct {
+            file: std.fs.File,
+            buffer: []const u8,
+            offset: u64,
+            write: std.fs.File.PWriteError!usize = undefined,
         },
     },
     callback: *const fn (*Op) void,
@@ -218,6 +242,9 @@ pub const Op = struct {
             .close => |d| d.file.close(),
             .pread => |*d| {
                 d.read = d.file.pread(d.buffer, d.offset);
+            },
+            .pwrite => |*d| {
+                d.write = d.file.pwrite(d.buffer, d.offset);
             },
         }
     }

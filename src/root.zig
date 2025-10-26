@@ -139,7 +139,7 @@ test "openat/pread/close" {
             Static.preadCalled = false;
             Static.closeCalled = false;
             Static.file = undefined;
-            Static.read = 0;
+            Static.read = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -188,6 +188,114 @@ test "openat/pread/close" {
                     "Hello from text file!\n",
                     buf[0..read],
                 );
+            }
+
+            // Close.
+            {
+                var close = Io.close(f, null, Static.closeCallback);
+
+                try io.submit(&close);
+
+                var done: usize = 0;
+                var start = try std.time.Timer.start();
+                while (done == 0 and start.read() < std.time.ns_per_s) {
+                    done = try io.poll(.all);
+                }
+
+                try std.testing.expect(done == 1);
+                try std.testing.expect(Static.closeCalled);
+            }
+        }
+    }.tcase);
+}
+
+test "openat/pwrite/close" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var openAtCalled: bool = undefined;
+                var pwriteCalled: bool = undefined;
+                var closeCalled: bool = undefined;
+                var file: anyerror!std.fs.File = undefined;
+                var write: std.fs.File.PWriteError!usize = undefined;
+
+                fn openAtCallback(iop: *Io.Op) void {
+                    openAtCalled = true;
+                    file = iop.data.openat.file;
+                }
+
+                fn pwriteCallback(iop: *Io.Op) void {
+                    pwriteCalled = true;
+                    write = iop.data.pwrite.write;
+                }
+
+                fn closeCallback(iop: *Io.Op) void {
+                    closeCalled = true;
+                    _ = iop.data.close;
+                }
+            };
+            Static.openAtCalled = false;
+            Static.pwriteCalled = false;
+            Static.closeCalled = false;
+            Static.file = undefined;
+            Static.write = undefined;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            const tmpDir = std.testing.tmpDir(.{});
+
+            // Open.
+            {
+                var openat = Io.openat(
+                    tmpDir.dir,
+                    "./file.txt",
+                    .{
+                        .read = true,
+                        .write = true,
+                        .create = true,
+                        .truncate = true,
+                    },
+                    null,
+                    Static.openAtCallback,
+                );
+
+                try io.submit(&openat);
+
+                var done: usize = 0;
+                var start = try std.time.Timer.start();
+                while (done == 0 and start.read() < std.time.ns_per_s) {
+                    done = try io.poll(.all);
+                }
+
+                try std.testing.expect(done == 1);
+                try std.testing.expect(Static.openAtCalled);
+            }
+
+            const f = try Static.file;
+
+            // Write.
+            {
+                var buf: []const u8 = "Hello world!";
+                var pwrite = Io.pwrite(f, buf[0..], 0, null, Static.pwriteCallback);
+
+                try io.submit(&pwrite);
+
+                var done: usize = 0;
+                var start = try std.time.Timer.start();
+                while (done == 0 and start.read() < std.time.ns_per_s) {
+                    done = try io.poll(.all);
+                }
+
+                const write = try Static.write;
+
+                try std.testing.expect(write == buf.len);
+
+                var rbuf: [64]u8 = undefined;
+                _ = try f.read(rbuf[0..]);
+
+                try std.testing.expectEqualStrings(buf, rbuf[0..12]);
             }
 
             // Close.

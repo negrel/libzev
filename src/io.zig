@@ -10,6 +10,7 @@ pub const OpCode = enum(c_int) {
     openat = 2,
     close = 3,
     pread = 4,
+    pwrite = 5,
 };
 
 /// open() I/O operation options.

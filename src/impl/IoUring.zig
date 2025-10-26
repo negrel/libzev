@@ -74,6 +74,7 @@ fn enqueue(self: *Self, iop: *Op) !void {
         ),
         .close => |d| sqe.prep_close(d.file.handle),
         .pread => |d| sqe.prep_read(d.file.handle, d.buffer, d.offset),
+        .pwrite => |d| sqe.prep_write(d.file.handle, d.buffer, d.offset),
     }
     sqe.user_data = @intFromPtr(iop);
 }
@@ -162,6 +163,36 @@ pub fn poll(self: *Self, mode: io.PollMode) !u32 {
                         d.read = @intCast(cqe.res);
                     }
                 },
+                .pwrite => |*d| {
+                    if (cqe.res < 0) {
+                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        d.write = switch (rc) {
+                            .INTR => unreachable,
+                            .INVAL => error.InvalidArgument,
+                            .FAULT => unreachable,
+                            .SRCH => error.ProcessNotFound,
+                            .AGAIN => error.WouldBlock,
+                            // can be a race condition.
+                            .BADF => error.NotOpenForWriting,
+                            // `connect` was never called.
+                            .DESTADDRREQ => unreachable,
+                            .DQUOT => error.DiskQuota,
+                            .FBIG => error.FileTooBig,
+                            .IO => error.InputOutput,
+                            .NOSPC => error.NoSpaceLeft,
+                            .ACCES => error.AccessDenied,
+                            .PERM => error.PermissionDenied,
+                            .PIPE => error.BrokenPipe,
+                            .CONNRESET => error.ConnectionResetByPeer,
+                            .BUSY => error.DeviceBusy,
+                            .NXIO => error.NoDevice,
+                            .MSGSIZE => error.MessageTooBig,
+                            else => |err| posix.unexpectedErrno(err),
+                        };
+                    } else {
+                        d.write = @intCast(cqe.res);
+                    }
+                },
             }
 
             op.callback(op);
@@ -211,7 +242,7 @@ pub fn openat(
         .ACCMODE = .RDONLY,
     };
     if (opts.write) {
-        if (opts.read) os_flags.ACCMODE = .RDONLY else {
+        if (opts.read) os_flags.ACCMODE = .RDWR else {
             os_flags.ACCMODE = .WRONLY;
         }
     }
@@ -249,6 +280,24 @@ pub fn pread(
 ) Op {
     return .{
         .data = .{ .pread = .{
+            .file = file,
+            .buffer = buf,
+            .offset = offset,
+        } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
+pub fn pwrite(
+    file: std.fs.File,
+    buf: []const u8,
+    offset: u64,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .pwrite = .{
             .file = file,
             .buffer = buf,
             .offset = offset,
@@ -297,6 +346,12 @@ pub const Op = struct {
             buffer: []u8,
             offset: u64,
             read: std.fs.File.ReadError!usize = undefined,
+        },
+        pwrite: struct {
+            file: std.fs.File,
+            buffer: []const u8,
+            offset: u64,
+            write: std.fs.File.PWriteError!usize = undefined,
         },
     },
     callback: *const fn (*Op) void,
