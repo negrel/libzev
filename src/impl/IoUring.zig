@@ -203,12 +203,12 @@ pub fn openat(
 }
 
 pub fn close(
-    f: std.fs.File,
+    file: std.fs.File,
     user_data: ?*anyopaque,
     callback: *const fn (*Op) void,
 ) Op {
     return .{
-        .data = .{ .close = .{ .file = f } },
+        .data = .{ .close = .{ .file = file } },
         .user_data = user_data,
         .callback = callback,
     };

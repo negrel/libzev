@@ -14,7 +14,10 @@ pub const Impl = enum {
     pub inline fn available() []const Self {
         return switch (builtin.os.tag) {
             .linux => &.{ .io_uring, .thread_pool },
-            else => &.{},
+            else => {
+                if (builtin.single_threaded) return &.{};
+                return &.{.thread_pool};
+            },
         };
     }
 
