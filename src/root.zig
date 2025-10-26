@@ -27,13 +27,8 @@ test "single noop" {
             var noopOp = Io.noop(null, &Static.callback);
             try io.submit(&noopOp);
 
-            var done: usize = 0;
-            var start = try std.time.Timer.start();
-            while (done < 1 and start.read() < std.time.ns_per_s) {
-                done += try io.poll(.one);
-            }
+            _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
 
-            try std.testing.expect(done == 1);
             try std.testing.expect(Static.called);
         }
     }.tcase);
@@ -63,11 +58,7 @@ test "batch of noop" {
             }
             try io.submitBatch(batch);
 
-            var done: usize = 0;
-            var start = try std.time.Timer.start();
-            while (done < iops.len and start.read() < std.time.ns_per_s) {
-                done += try io.poll(.all);
-            }
+            _ = try testutils.pollAtLeast(Io, &io, iops.len, std.time.ns_per_s);
 
             try std.testing.expect(Static.called == iops.len);
         }
@@ -93,19 +84,16 @@ test "batch of timeout" {
             var batch: Io.Batch = .{};
 
             for (0..iops.len) |i| {
-                iops[i] = Io.timeout(5, null, &Static.callback);
+                iops[i] = Io.timeout(i % 5, null, &Static.callback);
                 batch.push(&iops[i]);
             }
             try io.submitBatch(batch);
 
-            var done: usize = 0;
-            for (0..iops.len) |_| {
-                const polled = try io.poll(.all);
-                done += polled;
+            var start = try std.time.Timer.start();
+            _ = try testutils.pollAtLeast(Io, &io, iops.len, std.time.ns_per_s);
 
-                if (done >= iops.len) break;
-            }
             try std.testing.expect(Static.called == iops.len);
+            try std.testing.expect(start.read() < std.time.ns_per_s);
         }
     }.tcase);
 }
@@ -160,11 +148,7 @@ test "openat/pread/close" {
 
                 try io.submit(&pread);
 
-                var done: usize = 0;
-                var start = try std.time.Timer.start();
-                while (done == 0 and start.read() < std.time.ns_per_s) {
-                    done = try io.poll(.all);
-                }
+                _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
 
                 const read = try Static.read;
 
@@ -245,13 +229,8 @@ test "openat/pwrite/fsync/close" {
 
                 try io.submit(&pwrite);
 
-                var done: usize = 0;
-                var start = try std.time.Timer.start();
-                while (done == 0 and start.read() < std.time.ns_per_s) {
-                    done = try io.poll(.all);
-                }
+                _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
 
-                try std.testing.expect(done == 1);
                 try std.testing.expect(Static.pwriteCalled);
 
                 const write = try Static.write;
@@ -270,13 +249,8 @@ test "openat/pwrite/fsync/close" {
 
                 try io.submit(&fsync);
 
-                var done: usize = 0;
-                var start = try std.time.Timer.start();
-                while (done == 0 and start.read() < std.time.ns_per_s) {
-                    done = try io.poll(.all);
-                }
+                _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
 
-                try std.testing.expect(done == 1);
                 try std.testing.expect(Static.fsyncCalled);
 
                 try Static.fsyncResult;
@@ -335,13 +309,8 @@ test "openat/stat/close" {
 
                 try io.submit(&openat);
 
-                var done: usize = 0;
-                var start = try std.time.Timer.start();
-                while (done == 0 and start.read() < std.time.ns_per_s) {
-                    done = try io.poll(.all);
-                }
+                _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
 
-                try std.testing.expect(done == 1);
                 try std.testing.expect(Static.openAtCalled);
             }
 
@@ -353,11 +322,7 @@ test "openat/stat/close" {
 
                 try io.submit(&stat);
 
-                var done: usize = 0;
-                var start = try std.time.Timer.start();
-                while (done == 0 and start.read() < std.time.ns_per_s) {
-                    done = try io.poll(.all);
-                }
+                _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
 
                 const s = try Static.stat;
 
@@ -378,16 +343,19 @@ test "openat/stat/close" {
 const testutils = struct {
     const iopkg = @import("./io.zig");
 
-    fn pollAtMost1Sec(
+    fn pollAtLeast(
         Io: type,
         io: *Io,
+        completed: usize,
+        ns: u64,
     ) !usize {
         var done: usize = 0;
         var start = try std.time.Timer.start();
-        while (done == 0 and start.read() < std.time.ns_per_s) {
-            done = try io.poll(.all);
+        while (done < completed and start.read() < ns) {
+            done += try io.poll(.all);
         }
 
+        try std.testing.expect(done >= completed);
         return done;
     }
 
@@ -412,9 +380,8 @@ const testutils = struct {
         var op = Io.openat(dir, path, opts, null, Static.openAtCallback);
 
         try io.submit(&op);
-        const done = try pollAtMost1Sec(Io, io);
+        _ = try pollAtLeast(Io, io, 1, std.time.ns_per_s);
 
-        try std.testing.expect(done == 1);
         try std.testing.expect(Static.callbackCalled);
 
         return try Static.file;
@@ -439,9 +406,8 @@ const testutils = struct {
 
         try io.submit(&op);
 
-        const done = try pollAtMost1Sec(Io, io);
+        _ = try pollAtLeast(Io, io, 1, std.time.ns_per_s);
 
-        try std.testing.expect(done == 1);
         try std.testing.expect(Static.callbackCalled);
     }
 };
