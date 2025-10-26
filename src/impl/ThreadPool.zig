@@ -145,6 +145,18 @@ pub fn pread(
     };
 }
 
+pub fn fsync(
+    file: std.fs.File,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .fsync = .{ .file = file } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 pub fn pwrite(
     file: std.fs.File,
     buf: []const u8,
@@ -186,6 +198,10 @@ pub const Op = struct {
             buffer: []const u8,
             offset: u64,
             write: std.fs.File.PWriteError!usize = undefined,
+        },
+        fsync: struct {
+            file: std.fs.File,
+            result: std.fs.File.SyncError!void = undefined,
         },
     },
     callback: *const fn (*Op) void,
@@ -245,6 +261,9 @@ pub const Op = struct {
             },
             .pwrite => |*d| {
                 d.write = d.file.pwrite(d.buffer, d.offset);
+            },
+            .fsync => |*d| {
+                d.result = d.file.sync();
             },
         }
     }

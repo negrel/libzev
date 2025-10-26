@@ -75,6 +75,7 @@ fn enqueue(self: *Self, iop: *Op) !void {
         .close => |d| sqe.prep_close(d.file.handle),
         .pread => |d| sqe.prep_read(d.file.handle, d.buffer, d.offset),
         .pwrite => |d| sqe.prep_write(d.file.handle, d.buffer, d.offset),
+        .fsync => |d| sqe.prep_fsync(d.file.handle, 0),
     }
     sqe.user_data = @intFromPtr(iop);
 }
@@ -193,6 +194,20 @@ pub fn poll(self: *Self, mode: io.PollMode) !u32 {
                         d.write = @intCast(cqe.res);
                     }
                 },
+                .fsync => |*d| {
+                    if (cqe.res < 0) {
+                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        d.result = switch (rc) {
+                            .BADF, .INVAL, .ROFS => unreachable,
+                            .IO => error.InputOutput,
+                            .NOSPC => error.NoSpaceLeft,
+                            .DQUOT => error.DiskQuota,
+                            else => |err| posix.unexpectedErrno(err),
+                        };
+                    } else {
+                        d.result = undefined;
+                    }
+                },
             }
 
             op.callback(op);
@@ -307,6 +322,18 @@ pub fn pwrite(
     };
 }
 
+pub fn fsync(
+    file: std.fs.File,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .fsync = .{ .file = file } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 fn msToTimespec(ms: u64) linux.kernel_timespec {
     const max: linux.kernel_timespec = .{
         .sec = std.math.maxInt(isize),
@@ -352,6 +379,10 @@ pub const Op = struct {
             buffer: []const u8,
             offset: u64,
             write: std.fs.File.PWriteError!usize = undefined,
+        },
+        fsync: struct {
+            file: std.fs.File,
+            result: std.fs.File.SyncError!void = undefined,
         },
     },
     callback: *const fn (*Op) void,

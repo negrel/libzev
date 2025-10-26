@@ -209,15 +209,17 @@ test "openat/pread/close" {
     }.tcase);
 }
 
-test "openat/pwrite/close" {
+test "openat/pwrite/fsync/close" {
     try forEachAvailableImpl(struct {
         fn tcase(Io: type) !void {
             const Static = struct {
                 var openAtCalled: bool = undefined;
                 var pwriteCalled: bool = undefined;
+                var fsyncCalled: bool = undefined;
                 var closeCalled: bool = undefined;
                 var file: anyerror!std.fs.File = undefined;
                 var write: std.fs.File.PWriteError!usize = undefined;
+                var fsyncResult: std.fs.File.SyncError!void = undefined;
 
                 fn openAtCallback(iop: *Io.Op) void {
                     openAtCalled = true;
@@ -227,6 +229,11 @@ test "openat/pwrite/close" {
                 fn pwriteCallback(iop: *Io.Op) void {
                     pwriteCalled = true;
                     write = iop.data.pwrite.write;
+                }
+
+                fn fsyncCallback(iop: *Io.Op) void {
+                    fsyncCalled = true;
+                    fsyncResult = iop.data.fsync.result;
                 }
 
                 fn closeCallback(iop: *Io.Op) void {
@@ -239,6 +246,7 @@ test "openat/pwrite/close" {
             Static.closeCalled = false;
             Static.file = undefined;
             Static.write = undefined;
+            Static.fsyncResult = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -288,6 +296,9 @@ test "openat/pwrite/close" {
                     done = try io.poll(.all);
                 }
 
+                try std.testing.expect(done == 1);
+                try std.testing.expect(Static.pwriteCalled);
+
                 const write = try Static.write;
 
                 try std.testing.expect(write == buf.len);
@@ -296,6 +307,24 @@ test "openat/pwrite/close" {
                 _ = try f.read(rbuf[0..]);
 
                 try std.testing.expectEqualStrings(buf, rbuf[0..12]);
+            }
+
+            // FSync.
+            {
+                var fsync = Io.fsync(f, null, Static.fsyncCallback);
+
+                try io.submit(&fsync);
+
+                var done: usize = 0;
+                var start = try std.time.Timer.start();
+                while (done == 0 and start.read() < std.time.ns_per_s) {
+                    done = try io.poll(.all);
+                }
+
+                try std.testing.expect(done == 1);
+                try std.testing.expect(Static.fsyncCalled);
+
+                try Static.fsyncResult;
             }
 
             // Close.
