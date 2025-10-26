@@ -76,6 +76,14 @@ fn enqueue(self: *Self, iop: *Op) !void {
         .pread => |d| sqe.prep_read(d.file.handle, d.buffer, d.offset),
         .pwrite => |d| sqe.prep_write(d.file.handle, d.buffer, d.offset),
         .fsync => |d| sqe.prep_fsync(d.file.handle, 0),
+        .stat => |*d| sqe.prep_statx(
+            d.file.handle,
+            "",
+            linux.AT.EMPTY_PATH,
+            linux.STATX_TYPE | linux.STATX_MODE | linux.STATX_ATIME |
+                linux.STATX_MTIME | linux.STATX_CTIME,
+            &d.statx,
+        ),
     }
     sqe.user_data = @intFromPtr(iop);
 }
@@ -208,6 +216,25 @@ pub fn poll(self: *Self, mode: io.PollMode) !u32 {
                         d.result = undefined;
                     }
                 },
+                .stat => |*d| {
+                    if (cqe.res < 0) {
+                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        d.stat = switch (rc) {
+                            .ACCES => unreachable,
+                            .BADF => unreachable,
+                            .FAULT => unreachable,
+                            .INVAL => unreachable,
+                            .LOOP => unreachable,
+                            .NAMETOOLONG => unreachable,
+                            .NOENT => unreachable,
+                            .NOMEM => error.SystemResources,
+                            .NOTDIR => unreachable,
+                            else => |err| posix.unexpectedErrno(err),
+                        };
+                    } else {
+                        d.stat = std.fs.File.Stat.fromLinux(d.statx);
+                    }
+                },
             }
 
             op.callback(op);
@@ -334,6 +361,18 @@ pub fn fsync(
     };
 }
 
+pub fn stat(
+    file: std.fs.File,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .stat = .{ .file = file } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 fn msToTimespec(ms: u64) linux.kernel_timespec {
     const max: linux.kernel_timespec = .{
         .sec = std.math.maxInt(isize),
@@ -383,6 +422,11 @@ pub const Op = struct {
         fsync: struct {
             file: std.fs.File,
             result: std.fs.File.SyncError!void = undefined,
+        },
+        stat: struct {
+            file: std.fs.File,
+            statx: linux.Statx = undefined,
+            stat: std.fs.File.StatError!std.fs.File.Stat = undefined,
         },
     },
     callback: *const fn (*Op) void,

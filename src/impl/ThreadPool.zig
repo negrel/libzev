@@ -175,6 +175,18 @@ pub fn pwrite(
     };
 }
 
+pub fn stat(
+    file: std.fs.File,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .stat = .{ .file = file } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 pub const Op = struct {
     io: *Io = undefined,
     data: union(io.OpCode) {
@@ -203,6 +215,10 @@ pub const Op = struct {
             file: std.fs.File,
             result: std.fs.File.SyncError!void = undefined,
         },
+        stat: struct {
+            file: std.fs.File,
+            stat: std.fs.File.StatError!std.fs.File.Stat = undefined,
+        },
     },
     callback: *const fn (*Op) void,
     user_data: ?*anyopaque,
@@ -211,7 +227,7 @@ pub const Op = struct {
         .node = .{},
         .callback = struct {
             fn cb(t: *ThreadPool.Task) void {
-                const op: *Op = @fieldParentPtr("task", t);
+                const op: *Op = @alignCast(@fieldParentPtr("task", t));
                 op.blocking();
 
                 const i: *Io = op.io;
@@ -256,15 +272,10 @@ pub const Op = struct {
                 }
             },
             .close => |d| d.file.close(),
-            .pread => |*d| {
-                d.read = d.file.pread(d.buffer, d.offset);
-            },
-            .pwrite => |*d| {
-                d.write = d.file.pwrite(d.buffer, d.offset);
-            },
-            .fsync => |*d| {
-                d.result = d.file.sync();
-            },
+            .pread => |*d| d.read = d.file.pread(d.buffer, d.offset),
+            .pwrite => |*d| d.write = d.file.pwrite(d.buffer, d.offset),
+            .fsync => |*d| d.result = d.file.sync(),
+            .stat => |*d| d.stat = d.file.stat(),
         }
     }
 };

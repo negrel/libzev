@@ -345,3 +345,103 @@ test "openat/pwrite/fsync/close" {
         }
     }.tcase);
 }
+
+test "openat/stat/close" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var openAtCalled: bool = undefined;
+                var statCalled: bool = undefined;
+                var closeCalled: bool = undefined;
+                var file: anyerror!std.fs.File = undefined;
+                var stat: std.fs.File.StatError!std.fs.File.Stat = undefined;
+
+                fn openAtCallback(iop: *Io.Op) void {
+                    openAtCalled = true;
+                    file = iop.data.openat.file;
+                }
+
+                fn statCallback(iop: *Io.Op) void {
+                    statCalled = true;
+                    stat = iop.data.stat.stat;
+                }
+
+                fn closeCallback(iop: *Io.Op) void {
+                    closeCalled = true;
+                    _ = iop.data.close;
+                }
+            };
+            Static.openAtCalled = false;
+            Static.statCalled = false;
+            Static.closeCalled = false;
+            Static.file = undefined;
+            Static.stat = undefined;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            // Open.
+            {
+                var openat = Io.openat(
+                    std.fs.cwd(),
+                    "./src/testdata/file.txt",
+                    .{ .read = true },
+                    null,
+                    Static.openAtCallback,
+                );
+
+                try io.submit(&openat);
+
+                var done: usize = 0;
+                var start = try std.time.Timer.start();
+                while (done == 0 and start.read() < std.time.ns_per_s) {
+                    done = try io.poll(.all);
+                }
+
+                try std.testing.expect(done == 1);
+                try std.testing.expect(Static.openAtCalled);
+            }
+
+            const f = try Static.file;
+
+            // Stat.
+            {
+                var stat = Io.stat(f, null, Static.statCallback);
+
+                try io.submit(&stat);
+
+                var done: usize = 0;
+                var start = try std.time.Timer.start();
+                while (done == 0 and start.read() < std.time.ns_per_s) {
+                    done = try io.poll(.all);
+                }
+
+                const s = try Static.stat;
+
+                try std.testing.expect(s.inode != 0);
+                try std.testing.expect(s.atime > 0);
+                try std.testing.expect(s.mtime > 0);
+                try std.testing.expect(s.ctime > 0);
+                try std.testing.expect(s.size == 22);
+                //try std.testing.expect(s.mode == 22);
+            }
+
+            // Close.
+            {
+                var close = Io.close(f, null, Static.closeCallback);
+
+                try io.submit(&close);
+
+                var done: usize = 0;
+                var start = try std.time.Timer.start();
+                while (done == 0 and start.read() < std.time.ns_per_s) {
+                    done = try io.poll(.all);
+                }
+
+                try std.testing.expect(done == 1);
+                try std.testing.expect(Static.closeCalled);
+            }
+        }
+    }.tcase);
+}

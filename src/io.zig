@@ -12,6 +12,7 @@ pub const OpCode = enum(c_int) {
     pread = 4,
     pwrite = 5,
     fsync = 6,
+    stat = 7,
 };
 
 /// open() I/O operation options.
@@ -59,7 +60,7 @@ pub fn Batch(Io: type) type {
 
         pub fn pop(self: *Self) ?*Io.Op {
             const n = self.list.popFirst() orelse return null;
-            return @fieldParentPtr("node", n);
+            return @alignCast(@fieldParentPtr("node", n));
         }
     };
 }
