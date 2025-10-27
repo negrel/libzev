@@ -238,9 +238,10 @@ test "openat/pwrite/fsync/close" {
                 try std.testing.expect(write == buf.len);
 
                 var rbuf: [64]u8 = undefined;
-                _ = try f.read(rbuf[0..]);
+                const read = try f.pread(rbuf[0..], 0);
 
-                try std.testing.expectEqualStrings(buf, rbuf[0..12]);
+                try std.testing.expect(read == 12);
+                try std.testing.expectEqualStrings(buf, rbuf[0..read]);
             }
 
             // FSync.
