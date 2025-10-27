@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const llvm = b.option(bool, "llvm", "Use LLVM backend") orelse false;
 
-    const mod = b.addModule("luaio", .{
+    const mod = b.addModule("zev", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
