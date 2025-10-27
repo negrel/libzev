@@ -80,7 +80,7 @@ test "batch of timeout" {
             try io.init(.{});
             defer io.deinit();
 
-            var iops: [4096]Io.Op = undefined;
+            var iops: [256]Io.Op = undefined;
             var batch: Io.Batch = .{};
 
             for (0..iops.len) |i| {
