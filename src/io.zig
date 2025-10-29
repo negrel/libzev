@@ -13,6 +13,7 @@ pub const OpCode = enum(c_int) {
     pwrite = 5,
     fsync = 6,
     stat = 7,
+    getcwd = 8,
 };
 
 /// open() I/O operation options.
@@ -64,3 +65,9 @@ pub fn Batch(Io: type) type {
         }
     };
 }
+
+pub const GetCwdError = error{
+    CurrentWorkingDirectoryUnlinked,
+    NameTooLong,
+    Unexpected,
+};

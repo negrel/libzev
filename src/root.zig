@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const impl = @import("./impl.zig");
+const iopkg = @import("./io.zig");
 
 fn forEachAvailableImpl(tcase: anytype) !void {
     inline for (impl.Impl.available()) |i| {
@@ -49,7 +50,7 @@ test "batch of noop" {
             try io.init(.{});
             defer io.deinit();
 
-            var iops: [4096]Io.Op = undefined;
+            var iops: [16]Io.Op = undefined;
             var batch: Io.Batch = .{};
 
             for (0..iops.len) |i| {
@@ -80,7 +81,7 @@ test "batch of timeout" {
             try io.init(.{});
             defer io.deinit();
 
-            var iops: [256]Io.Op = undefined;
+            var iops: [16]Io.Op = undefined;
             var batch: Io.Batch = .{};
 
             for (0..iops.len) |i| {
@@ -341,9 +342,46 @@ test "openat/stat/close" {
     }.tcase);
 }
 
-const testutils = struct {
-    const iopkg = @import("./io.zig");
+test "getcwd" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var callbackCalled: bool = undefined;
+                var cwd: iopkg.GetCwdError![]u8 = undefined;
 
+                fn getCwdCallback(iop: *Io.Op) void {
+                    callbackCalled = true;
+                    cwd = iop.data.getcwd.cwd;
+                }
+            };
+            Static.callbackCalled = false;
+            Static.cwd = &.{};
+
+            var allocator = std.heap.smp_allocator;
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            var buffer: [4096]u8 = undefined;
+            var op = Io.getcwd(buffer[0..], null, Static.getCwdCallback);
+
+            try io.submit(&op);
+
+            _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
+
+            try std.testing.expect(Static.callbackCalled);
+
+            const expected = try std.process.getCwdAlloc(allocator);
+            defer allocator.free(expected);
+
+            const actual = try Static.cwd;
+
+            try std.testing.expectEqualStrings(expected, actual);
+        }
+    }.tcase);
+}
+
+const testutils = struct {
     fn pollAtLeast(
         Io: type,
         io: *Io,

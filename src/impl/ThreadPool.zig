@@ -187,6 +187,18 @@ pub fn stat(
     };
 }
 
+pub fn getcwd(
+    buffer: []u8,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .getcwd = .{ .buffer = buffer } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 pub const Op = struct {
     io: *Io = undefined,
     data: union(io.OpCode) {
@@ -218,6 +230,10 @@ pub const Op = struct {
         stat: struct {
             file: std.fs.File,
             stat: std.fs.File.StatError!std.fs.File.Stat = undefined,
+        },
+        getcwd: struct {
+            buffer: []u8,
+            cwd: io.GetCwdError![]u8 = undefined,
         },
     },
     callback: *const fn (*Op) void,
@@ -276,6 +292,8 @@ pub const Op = struct {
             .pwrite => |*d| d.write = d.file.pwrite(d.buffer, d.offset),
             .fsync => |*d| d.result = d.file.sync(),
             .stat => |*d| d.stat = d.file.stat(),
+            .getcwd => |*d| d.cwd = std.process.getCwd(d.buffer),
+            .chdir => |*d| d.result = std.process.changeCurDir(d.dir),
         }
     }
 };
