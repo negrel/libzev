@@ -115,77 +115,11 @@ pub fn openat(
     };
 }
 
-pub fn close(
-    file: std.fs.File,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Op) void,
-) Op {
-    return .{
-        .data = .{ .close = .{ .file = file } },
-        .user_data = user_data,
-        .callback = callback,
-    };
-}
-
-pub fn pread(
-    file: std.fs.File,
-    buf: []u8,
-    offset: u64,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Op) void,
-) Op {
-    return .{
-        .data = .{ .pread = .{
-            .file = file,
-            .buffer = buf,
-            .offset = offset,
-        } },
-        .user_data = user_data,
-        .callback = callback,
-    };
-}
-
-pub fn fsync(
-    file: std.fs.File,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Op) void,
-) Op {
-    return .{
-        .data = .{ .fsync = .{ .file = file } },
-        .user_data = user_data,
-        .callback = callback,
-    };
-}
-
-pub fn pwrite(
-    file: std.fs.File,
-    buf: []const u8,
-    offset: u64,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Op) void,
-) Op {
-    return .{
-        .data = .{ .pwrite = .{
-            .file = file,
-            .buffer = buf,
-            .offset = offset,
-        } },
-        .user_data = user_data,
-        .callback = callback,
-    };
-}
-
-pub fn stat(
-    file: std.fs.File,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Op) void,
-) Op {
-    return .{
-        .data = .{ .stat = .{ .file = file } },
-        .user_data = user_data,
-        .callback = callback,
-    };
-}
+pub const close = io.close(Self);
+pub const pread = io.pread(Self);
+pub const pwrite = io.pwrite(Self);
+pub const fsync = io.fsync(Self);
+pub const stat = io.stat(Self);
 
 pub fn getcwd(
     buffer: []u8,

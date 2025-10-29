@@ -72,3 +72,119 @@ pub const GetCwdError = error{
     NameTooLong,
     Unexpected,
 };
+
+pub fn close(Io: type) *const fn (
+    f: std.fs.File,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Io.Op) void,
+) Io.Op {
+    return struct {
+        fn func(
+            file: std.fs.File,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Io.Op) void,
+        ) Io.Op {
+            return .{
+                .data = .{ .close = .{ .file = file } },
+                .user_data = user_data,
+                .callback = callback,
+            };
+        }
+    }.func;
+}
+
+pub fn pread(Io: type) *const fn (
+    file: std.fs.File,
+    buf: []u8,
+    offset: u64,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Io.Op) void,
+) Io.Op {
+    return struct {
+        fn func(
+            file: std.fs.File,
+            buf: []u8,
+            offset: u64,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Io.Op) void,
+        ) Io.Op {
+            return .{
+                .data = .{ .pread = .{
+                    .file = file,
+                    .buffer = buf,
+                    .offset = offset,
+                } },
+                .user_data = user_data,
+                .callback = callback,
+            };
+        }
+    }.func;
+}
+
+pub fn pwrite(Io: type) *const fn (
+    file: std.fs.File,
+    buf: []const u8,
+    offset: u64,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Io.Op) void,
+) Io.Op {
+    return struct {
+        fn func(
+            file: std.fs.File,
+            buf: []const u8,
+            offset: u64,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Io.Op) void,
+        ) Io.Op {
+            return .{
+                .data = .{ .pwrite = .{
+                    .file = file,
+                    .buffer = buf,
+                    .offset = offset,
+                } },
+                .user_data = user_data,
+                .callback = callback,
+            };
+        }
+    }.func;
+}
+
+pub fn fsync(Io: type) *const fn (
+    file: std.fs.File,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Io.Op) void,
+) Io.Op {
+    return struct {
+        fn func(
+            file: std.fs.File,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Io.Op) void,
+        ) Io.Op {
+            return .{
+                .data = .{ .fsync = .{ .file = file } },
+                .user_data = user_data,
+                .callback = callback,
+            };
+        }
+    }.func;
+}
+
+pub fn stat(Io: type) *const fn (
+    file: std.fs.File,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Io.Op) void,
+) Io.Op {
+    return struct {
+        fn func(
+            file: std.fs.File,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Io.Op) void,
+        ) Io.Op {
+            return .{
+                .data = .{ .stat = .{ .file = file } },
+                .user_data = user_data,
+                .callback = callback,
+            };
+        }
+    }.func;
+}
