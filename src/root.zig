@@ -381,6 +381,46 @@ test "getcwd" {
     }.tcase);
 }
 
+test "chdir" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var callbackCalled: bool = undefined;
+                var result: std.posix.ChangeCurDirError!void = undefined;
+
+                fn chdirCallback(iop: *Io.Op) void {
+                    callbackCalled = true;
+                    result = iop.data.chdir.result;
+                }
+            };
+            Static.callbackCalled = false;
+            Static.result = undefined;
+
+            var allocator = std.heap.smp_allocator;
+            const initial_cwd = try std.process.getCwdAlloc(allocator);
+            defer allocator.free(initial_cwd);
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            var op = Io.chdir("./src", null, Static.chdirCallback);
+
+            try io.submit(&op);
+
+            _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
+            try Static.result;
+
+            try std.testing.expect(Static.callbackCalled);
+
+            const new_cwd = try std.process.getCwdAlloc(allocator);
+            defer allocator.free(initial_cwd);
+
+            try std.testing.expect(!std.mem.eql(u8, initial_cwd, new_cwd));
+        }
+    }.tcase);
+}
+
 const testutils = struct {
     fn pollAtLeast(
         Io: type,

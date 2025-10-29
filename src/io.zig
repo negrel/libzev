@@ -14,6 +14,7 @@ pub const OpCode = enum(c_int) {
     fsync = 6,
     stat = 7,
     getcwd = 8,
+    chdir = 9,
 };
 
 /// open() I/O operation options.

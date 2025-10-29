@@ -199,6 +199,18 @@ pub fn getcwd(
     };
 }
 
+pub fn chdir(
+    dir: []const u8,
+    user_data: ?*anyopaque,
+    callback: *const fn (*Op) void,
+) Op {
+    return .{
+        .data = .{ .chdir = .{ .dir = dir } },
+        .user_data = user_data,
+        .callback = callback,
+    };
+}
+
 pub const Op = struct {
     io: *Io = undefined,
     data: union(io.OpCode) {
@@ -234,6 +246,10 @@ pub const Op = struct {
         getcwd: struct {
             buffer: []u8,
             cwd: io.GetCwdError![]u8 = undefined,
+        },
+        chdir: struct {
+            dir: []const u8,
+            result: std.posix.ChangeCurDirError!void = undefined,
         },
     },
     callback: *const fn (*Op) void,
