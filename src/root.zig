@@ -4,7 +4,7 @@ const impl = @import("./impl.zig");
 const iopkg = @import("./io.zig");
 
 pub const NoOp = iopkg.NoOp;
-pub const Timeout = iopkg.TimeOut;
+pub const TimeOut = iopkg.TimeOut;
 pub const OpenAt = iopkg.OpenAt;
 
 fn forEachAvailableImpl(tcase: anytype) !void {
@@ -23,7 +23,7 @@ test "single noop" {
             const Static = struct {
                 var called: bool = undefined;
 
-                fn callback(_: NoOp) callconv(.c) void {
+                fn callback(_: *Io.Op(NoOp)) callconv(.c) void {
                     called = true;
                 }
             };
@@ -49,7 +49,7 @@ test "batch of noop" {
         fn tcase(Io: type) !void {
             const Static = struct {
                 var called: usize = undefined;
-                fn callback(_: NoOp) callconv(.c) void {
+                fn callback(_: *Io.Op(NoOp)) callconv(.c) void {
                     called += 1;
                 }
             };
@@ -79,7 +79,7 @@ test "batch of timeout" {
         fn tcase(Io: type) !void {
             const Static = struct {
                 var called: usize = undefined;
-                fn callback(_: Timeout) callconv(.c) void {
+                fn callback(_: *Io.Op(TimeOut)) callconv(.c) void {
                     called += 1;
                 }
             };
@@ -89,7 +89,7 @@ test "batch of timeout" {
             try io.init(.{});
             defer io.deinit();
 
-            var iops: [16]Io.Op(Timeout) = undefined;
+            var iops: [16]Io.Op(TimeOut) = undefined;
 
             for (0..iops.len) |i| {
                 iops[i] = Io.timeout(.{ .ms = i % 5 }, null, &Static.callback);

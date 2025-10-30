@@ -128,20 +128,9 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
         for (0..done) |i| {
             const cqe = cqes[i];
             const op_h: *io.OpHeader = @ptrFromInt(cqe.user_data);
-            switch (op_h.code) {
-                .noop => {
-                    const op = Op(io.NoOp).fromHeaderUnsafe(op_h);
-                    op.private.callback(op.data);
-                },
-                .timeout => {
-                    const op = Op(io.TimeOut).fromHeaderUnsafe(op_h);
-                    op.private.callback(op.data);
-                },
-                .openat => {
-                    const op = Op(io.OpenAt).fromHeaderUnsafe(op_h);
-                    op.private.callback(op.data);
-                },
-            }
+
+            const op = Op(io.NoOp).fromHeaderUnsafe(op_h);
+            op.private.callback(&op.header);
         }
         self.active -= done;
 
@@ -150,6 +139,32 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
             .one => if (done == 0) .one else .nowait,
             .nowait => .nowait,
         });
+    }
+}
+
+comptime {
+    // Safety: ensure we can cast *io.OpHeader to *Op(NoOp) to retrieve
+    // OpPrivateData when T is unknown.
+    if (@offsetOf(Op(io.NoOp), "private") !=
+        @offsetOf(Op(io.TimeOut), "private"))
+    {
+        @compileError("Op(Io).private offset depends on T");
+    }
+
+    // Safety: ensure we can safely access OpPrivateData.user_data when T is
+    // unknown.
+    if (@offsetOf(OpPrivateData(io.NoOp), "user_data") !=
+        @offsetOf(OpPrivateData(io.TimeOut), "user_data"))
+    {
+        @compileError("OpPrivateData(T).user_data offset depends on T");
+    }
+
+    // Safety: ensure we can safely access OpPrivateData.callback when T is
+    // unknown.
+    if (@offsetOf(OpPrivateData(io.NoOp), "callback") !=
+        @offsetOf(OpPrivateData(io.TimeOut), "callback"))
+    {
+        @compileError("OpPrivateData(T).callback offset depends on T");
     }
 }
 
@@ -190,9 +205,11 @@ pub fn OpPrivateData(T: type) type {
     } else void;
 
     return extern struct {
-        callback: *const fn (T) callconv(.c) void,
+        callback: *const fn (op_h: *io.OpHeader) callconv(.c) void,
         user_data: ?*anyopaque,
 
+        // Must be at end of struct so we can access field that doesn't depend
+        // on T.
         uring_data: UringData = undefined,
 
         pub fn init(opts: anytype) OpPrivateData(T) {

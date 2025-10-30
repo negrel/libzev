@@ -82,7 +82,7 @@ pub fn OpConstructor(Io: type, T: type) type {
     return *const fn (
         T,
         user_data: ?*anyopaque,
-        callback: *const fn (T) callconv(.c) void,
+        callback: *const fn (*Op(Io, T)) callconv(.c) void,
     ) Op(Io, T);
 }
 
@@ -91,13 +91,16 @@ pub fn noOp(Io: type) OpConstructor(Io, NoOp) {
         pub fn func(
             data: NoOp,
             user_data: ?*anyopaque,
-            callback: *const fn (NoOp) callconv(.c) void,
+            callback: *const fn (*Op(Io, NoOp)) callconv(.c) void,
         ) Op(Io, NoOp) {
             return .{
                 .data = data,
                 .private = Io.OpPrivateData(NoOp).init(.{
                     .user_data = user_data,
-                    .callback = callback,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
                 }),
             };
         }
@@ -109,13 +112,16 @@ pub fn timeOut(Io: type) OpConstructor(Io, TimeOut) {
         pub fn func(
             data: TimeOut,
             user_data: ?*anyopaque,
-            callback: *const fn (TimeOut) callconv(.c) void,
+            callback: *const fn (*Op(Io, TimeOut)) callconv(.c) void,
         ) Op(Io, TimeOut) {
             return .{
                 .data = data,
                 .private = Io.OpPrivateData(TimeOut).init(.{
                     .user_data = user_data,
-                    .callback = callback,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
                 }),
             };
         }
@@ -127,13 +133,16 @@ pub fn openAt(Io: type) OpConstructor(Io, OpenAt) {
         pub fn func(
             data: OpenAt,
             user_data: ?*anyopaque,
-            callback: *const fn (OpenAt) callconv(.c) void,
+            callback: *const fn (*Op(Io, OpenAt)) callconv(.c) void,
         ) Op(Io, OpenAt) {
             return .{
                 .data = data,
                 .private = Io.OpPrivateData(OpenAt).init(.{
                     .user_data = user_data,
-                    .callback = callback,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
                 }),
             };
         }

@@ -85,7 +85,7 @@ comptime {
     if (@offsetOf(Op(io.NoOp), "private") !=
         @offsetOf(Op(io.TimeOut), "private"))
     {
-        @compileError("ThreadPool.OpPrivateData depends on T");
+        @compileError("Op(ThreadPool, T).private offset depends on T");
     }
 }
 
@@ -122,7 +122,7 @@ pub fn OpPrivateData(T: type) type {
         // queue_mpsc intrusive field.
         next: ?*OpPrivateData(T) = null,
 
-        callback: *const fn (T) callconv(.c) void,
+        callback: *const fn (op_h: *io.OpHeader) callconv(.c) void,
         user_data: ?*anyopaque,
 
         pub fn init(opts: anytype) OpPrivateData(T) {
@@ -171,7 +171,7 @@ pub fn OpPrivateData(T: type) type {
         }
 
         pub fn doCallback(self: *OpPrivateData(T)) void {
-            self.callback(self.toOp().data);
+            self.callback(&self.toOp().header);
         }
     };
 }
