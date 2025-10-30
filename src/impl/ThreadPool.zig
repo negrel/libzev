@@ -144,14 +144,16 @@ pub fn OpPrivateData(T: type) type {
                 ),
                 .openat => {
                     const op = self.toOp();
-                    const d = op.data;
+                    const d = &op.data;
+                    const dir: std.fs.Dir = .{ .fd = d.dir };
+                    var file: std.fs.File.OpenError!std.fs.File = undefined;
 
                     if (d.opts.create or d.opts.create_new) {
-                        self.data.openat.file = d.dir.createFileZ(d.path, .{
+                        file = dir.createFileZ(d.path, .{
                             .read = d.opts.read,
                             .truncate = d.opts.truncate,
                             .exclusive = d.opts.create_new,
-                            .mode = d.opts.mode,
+                            .mode = d.permissions,
                         });
                     } else {
                         var mode: std.fs.File.OpenMode = .read_only;
@@ -162,10 +164,33 @@ pub fn OpPrivateData(T: type) type {
                                 mode = .write_only;
                             }
                         }
-                        d.file = d.dir.openFileZ(d.path, .{
+                        file = dir.openFileZ(d.path, .{
                             .mode = mode,
                         });
                     }
+                    const f = file catch |err| {
+                        d.err_code = @intFromError(err);
+                        return;
+                    };
+                    d.file = f.handle;
+                },
+                .close => {
+                    const op = self.toOp();
+                    const f: std.fs.File = .{ .handle = op.data.file };
+                    f.close();
+                },
+                .pread => {
+                    const op = self.toOp();
+                    const d = &op.data;
+                    const f: std.fs.File = .{ .handle = d.file };
+                    const read = f.pread(
+                        d.buffer[0..d.buffer_len],
+                        d.offset,
+                    ) catch |err| {
+                        d.err_code = @intFromError(err);
+                        return;
+                    };
+                    d.read = read;
                 },
             }
         }
@@ -176,5 +201,8 @@ pub fn OpPrivateData(T: type) type {
     };
 }
 
-pub const noop = io.noOp(Io);
-pub const timeout = io.timeOut(Io);
+pub const noOp = io.noOp(Io);
+pub const timeOut = io.timeOut(Io);
+pub const openAt = io.openAt(Io);
+pub const close = io.close(Io);
+pub const pRead = io.pRead(Io);

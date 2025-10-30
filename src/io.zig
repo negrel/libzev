@@ -7,6 +7,8 @@ pub const OpCode = enum(c_int) {
     noop,
     timeout,
     openat,
+    close,
+    pread,
 };
 
 /// OpHeader defines field at the beginning of Op(Io, T) that don't depend on
@@ -55,6 +57,22 @@ pub const TimeOut = extern struct {
 pub const OpenAt = extern struct {
     pub const op_code = OpCode.openat;
 
+    pub const Intern = struct {
+        dir: std.fs.Dir,
+        path: [:0]const u8,
+        opts: Options,
+        permissions: u32 = 0o0666,
+
+        fn toExtern(self: Intern) OpenAt {
+            return .{
+                .dir = self.dir.fd,
+                .path = self.path.ptr,
+                .opts = self.opts,
+                .permissions = self.permissions,
+            };
+        }
+    };
+
     pub const Options = extern struct {
         read: bool = true,
         write: bool = false,
@@ -70,20 +88,74 @@ pub const OpenAt = extern struct {
     permissions: u32 = 0o0666,
 
     file: std.fs.File.Handle = -1,
-    err_code: usize = 0,
+    err_code: u16 = 0,
 
     pub fn result(self: *OpenAt) std.fs.File.OpenError!std.fs.File {
-        if (self.err_code != 0) return @errorFromInt(self.err_code);
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
         return .{ .handle = self.file };
     }
 };
 
+pub const Close = extern struct {
+    pub const op_code = OpCode.close;
+
+    pub const Intern = struct {
+        file: std.fs.File,
+
+        fn toExtern(self: Intern) Close {
+            return .{ .file = self.file.handle };
+        }
+    };
+
+    file: std.fs.File.Handle,
+};
+
+pub const PRead = extern struct {
+    pub const op_code = OpCode.pread;
+
+    pub const Intern = struct {
+        file: std.fs.File,
+        buffer: []u8,
+        offset: u64,
+
+        fn toExtern(self: Intern) PRead {
+            return .{
+                .file = self.file.handle,
+                .buffer = self.buffer.ptr,
+                .buffer_len = self.buffer.len,
+                .offset = self.offset,
+            };
+        }
+    };
+
+    file: std.fs.File.Handle,
+    buffer: [*c]u8,
+    buffer_len: usize,
+    offset: u64,
+
+    read: usize = 0,
+    err_code: u16 = 0,
+
+    pub fn result(self: *PRead) std.fs.File.PReadError!usize {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+        return self.read;
+    }
+};
+
 pub fn OpConstructor(Io: type, T: type) type {
-    return *const fn (
-        T,
-        user_data: ?*anyopaque,
-        callback: *const fn (*Op(Io, T)) callconv(.c) void,
-    ) Op(Io, T);
+    if (@hasDecl(T, "Intern")) {
+        return *const fn (
+            T.Intern,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, T)) callconv(.c) void,
+        ) Op(Io, T);
+    } else {
+        return *const fn (
+            T,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, T)) callconv(.c) void,
+        ) Op(Io, T);
+    }
 }
 
 pub fn noOp(Io: type) OpConstructor(Io, NoOp) {
@@ -131,13 +203,55 @@ pub fn timeOut(Io: type) OpConstructor(Io, TimeOut) {
 pub fn openAt(Io: type) OpConstructor(Io, OpenAt) {
     return struct {
         pub fn func(
-            data: OpenAt,
+            data: OpenAt.Intern,
             user_data: ?*anyopaque,
             callback: *const fn (*Op(Io, OpenAt)) callconv(.c) void,
         ) Op(Io, OpenAt) {
             return .{
-                .data = data,
+                .data = data.toExtern(),
                 .private = Io.OpPrivateData(OpenAt).init(.{
+                    .user_data = user_data,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
+                }),
+            };
+        }
+    }.func;
+}
+
+pub fn close(Io: type) OpConstructor(Io, Close) {
+    return struct {
+        pub fn func(
+            data: Close.Intern,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, Close)) callconv(.c) void,
+        ) Op(Io, Close) {
+            return .{
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(Close).init(.{
+                    .user_data = user_data,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
+                }),
+            };
+        }
+    }.func;
+}
+
+pub fn pRead(Io: type) OpConstructor(Io, PRead) {
+    return struct {
+        pub fn func(
+            data: PRead.Intern,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, PRead)) callconv(.c) void,
+        ) Op(Io, PRead) {
+            return .{
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(PRead).init(.{
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
@@ -186,54 +300,6 @@ pub const GetCwdError = error{
     NameTooLong,
     Unexpected,
 };
-
-pub fn close(Io: type) *const fn (
-    f: std.fs.File,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Io.Op) void,
-) Io.Op {
-    return struct {
-        fn func(
-            file: std.fs.File,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Io.Op) void,
-        ) Io.Op {
-            return .{
-                .data = .{ .close = .{ .file = file } },
-                .user_data = user_data,
-                .callback = callback,
-            };
-        }
-    }.func;
-}
-
-pub fn pread(Io: type) *const fn (
-    file: std.fs.File,
-    buf: []u8,
-    offset: u64,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Io.Op) void,
-) Io.Op {
-    return struct {
-        fn func(
-            file: std.fs.File,
-            buf: []u8,
-            offset: u64,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Io.Op) void,
-        ) Io.Op {
-            return .{
-                .data = .{ .pread = .{
-                    .file = file,
-                    .buffer = buf,
-                    .offset = offset,
-                } },
-                .user_data = user_data,
-                .callback = callback,
-            };
-        }
-    }.func;
-}
 
 pub fn pwrite(Io: type) *const fn (
     file: std.fs.File,

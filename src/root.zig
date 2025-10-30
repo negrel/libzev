@@ -6,6 +6,8 @@ const iopkg = @import("./io.zig");
 pub const NoOp = iopkg.NoOp;
 pub const TimeOut = iopkg.TimeOut;
 pub const OpenAt = iopkg.OpenAt;
+pub const Close = iopkg.Close;
+pub const PRead = iopkg.PRead;
 
 fn forEachAvailableImpl(tcase: anytype) !void {
     inline for (impl.Impl.available()) |i| {
@@ -33,8 +35,8 @@ test "single noop" {
             try io.init(.{});
             defer io.deinit();
 
-            var noopOp: Io.Op(NoOp) = Io.noop(.{}, null, Static.callback);
-            try testutils.queue(&io, &noopOp, 1);
+            var op: Io.Op(NoOp) = Io.noOp(.{}, null, Static.callback);
+            try testutils.queue(&io, &op, 1);
             try testutils.submit(&io, 1);
 
             _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
@@ -59,17 +61,17 @@ test "batch of noop" {
             try io.init(.{});
             defer io.deinit();
 
-            var iops: [16]Io.Op(NoOp) = undefined;
+            var noops: [16]Io.Op(NoOp) = undefined;
 
-            for (0..iops.len) |i| {
-                iops[i] = Io.noop(.{}, null, &Static.callback);
-                try testutils.queue(&io, &iops[i], i + 1);
+            for (0..noops.len) |i| {
+                noops[i] = Io.noOp(.{}, null, &Static.callback);
+                try testutils.queue(&io, &noops[i], i + 1);
             }
-            try testutils.submit(&io, iops.len);
+            try testutils.submit(&io, noops.len);
 
-            _ = try testutils.pollAtLeast(&io, iops.len, std.time.ns_per_s);
+            _ = try testutils.pollAtLeast(&io, noops.len, std.time.ns_per_s);
 
-            try std.testing.expect(Static.called == iops.len);
+            try std.testing.expect(Static.called == noops.len);
         }
     }.tcase);
 }
@@ -89,91 +91,79 @@ test "batch of timeout" {
             try io.init(.{});
             defer io.deinit();
 
-            var iops: [16]Io.Op(TimeOut) = undefined;
+            var timeouts: [16]Io.Op(TimeOut) = undefined;
 
-            for (0..iops.len) |i| {
-                iops[i] = Io.timeout(.{ .ms = i % 5 }, null, &Static.callback);
-                try testutils.queue(&io, &iops[i], i + 1);
+            for (0..timeouts.len) |i| {
+                timeouts[i] = Io.timeOut(.{ .ms = i % 5 }, null, &Static.callback);
+                try testutils.queue(&io, &timeouts[i], i + 1);
             }
-            try testutils.submit(&io, iops.len);
+            try testutils.submit(&io, timeouts.len);
 
             var start = try std.time.Timer.start();
-            _ = try testutils.pollAtLeast(&io, iops.len, std.time.ns_per_s);
+            _ = try testutils.pollAtLeast(&io, timeouts.len, std.time.ns_per_s);
 
-            try std.testing.expect(Static.called == iops.len);
+            try std.testing.expect(Static.called == timeouts.len);
             try std.testing.expect(start.read() < std.time.ns_per_s);
         }
     }.tcase);
 }
 
-// test "openat/pread/close" {
-//     try forEachAvailableImpl(struct {
-//         fn tcase(Io: type) !void {
-//             const Static = struct {
-//                 var openAtCalled: bool = undefined;
-//                 var preadCalled: bool = undefined;
-//                 var closeCalled: bool = undefined;
-//                 var file: anyerror!std.fs.File = undefined;
-//                 var read: std.fs.File.PReadError!usize = undefined;
-//
-//                 fn openAtCallback(iop: *Io.Op) void {
-//                     openAtCalled = true;
-//                     file = iop.data.openat.file;
-//                 }
-//
-//                 fn preadCallback(iop: *Io.Op) void {
-//                     preadCalled = true;
-//                     read = iop.data.pread.read;
-//                 }
-//
-//                 fn closeCallback(iop: *Io.Op) void {
-//                     closeCalled = true;
-//                     _ = iop.data.close;
-//                 }
-//             };
-//             Static.openAtCalled = false;
-//             Static.preadCalled = false;
-//             Static.closeCalled = false;
-//             Static.file = undefined;
-//             Static.read = undefined;
-//
-//             var io: Io = .{};
-//             try io.init(.{});
-//             defer io.deinit();
-//
-//             const f = try testutils.openat(
-//                 Io,
-//                 &io,
-//                 .{
-//                     .dir = std.fs.cwd(),
-//                     .path = "./src/testdata/file.txt",
-//                     .opts = .{ .read = true },
-//                 },
-//             );
-//
-//             // Read.
-//             {
-//                 var buf: [64]u8 = undefined;
-//                 var pread = Io.pread(f, buf[0..], 0, null, Static.preadCallback);
-//
-//                 try io.submit(&pread);
-//
-//                 _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
-//
-//                 const read = try Static.read;
-//
-//                 try std.testing.expectEqualStrings(
-//                     "Hello from text file!\n",
-//                     buf[0..read],
-//                 );
-//             }
-//
-//             // Close.
-//             try testutils.close(Io, &io, f);
-//         }
-//     }.tcase);
-// }
-//
+test "openat/pread/close" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var preadCalled: bool = undefined;
+                var read: std.fs.File.PReadError!usize = undefined;
+
+                fn preadCallback(iop: *Io.Op(PRead)) callconv(.c) void {
+                    preadCalled = true;
+                    read = iop.data.result();
+                }
+            };
+            Static.preadCalled = false;
+            Static.read = undefined;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            const f = try testutils.openAt(
+                &io,
+                .{
+                    .dir = std.fs.cwd(),
+                    .path = "./src/testdata/file.txt",
+                    .opts = .{ .read = true },
+                },
+            );
+
+            // Read.
+            {
+                var buf: [64]u8 = undefined;
+                var pread = Io.pRead(.{
+                    .file = f,
+                    .buffer = buf[0..],
+                    .offset = 0,
+                }, null, Static.preadCallback);
+
+                try testutils.queue(&io, &pread, 1);
+                try testutils.submit(&io, 1);
+
+                _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
+
+                const read = try Static.read;
+
+                try std.testing.expectEqualStrings(
+                    "Hello from text file!\n",
+                    buf[0..read],
+                );
+            }
+
+            // Close.
+            try testutils.close(&io, .{ .file = f });
+        }
+    }.tcase);
+}
+
 // test "openat/pwrite/fsync/close" {
 //     try forEachAvailableImpl(struct {
 //         fn tcase(Io: type) !void {
@@ -431,6 +421,10 @@ test "batch of timeout" {
 // }
 //
 const testutils = struct {
+    fn Deref(T: type) type {
+        return @typeInfo(T).pointer.child;
+    }
+
     fn queue(io: anytype, op: anytype, queued: usize) !void {
         const actual = try io.queue(op);
         try std.testing.expectEqual(queued, actual);
@@ -454,5 +448,57 @@ const testutils = struct {
 
         try std.testing.expect(done >= completed);
         return done;
+    }
+
+    fn openAt(
+        io: anytype,
+        data: OpenAt.Intern,
+    ) !std.fs.File {
+        const Io = Deref(@TypeOf(io));
+
+        const Static = struct {
+            var callbackCalled: bool = undefined;
+            var file: std.fs.File.OpenError!std.fs.File = undefined;
+
+            fn openAtCallback(op: *Io.Op(OpenAt)) callconv(.c) void {
+                callbackCalled = true;
+                file = op.data.result();
+            }
+        };
+        Static.callbackCalled = false;
+
+        var op = Io.openAt(data, null, Static.openAtCallback);
+
+        _ = try io.queue(&op);
+        _ = try io.submit();
+        _ = try pollAtLeast(io, 1, std.time.ns_per_s);
+
+        try std.testing.expect(Static.callbackCalled);
+
+        return try Static.file;
+    }
+
+    fn close(
+        io: anytype,
+        data: Close.Intern,
+    ) !void {
+        const Io = Deref(@TypeOf(io));
+
+        const Static = struct {
+            var callbackCalled: bool = undefined;
+
+            fn closeCallback(_: *Io.Op(Close)) callconv(.c) void {
+                callbackCalled = true;
+            }
+        };
+        Static.callbackCalled = false;
+
+        var op = Io.close(data, null, Static.closeCallback);
+
+        _ = try io.queue(&op);
+        _ = try io.submit();
+        _ = try pollAtLeast(io, 1, std.time.ns_per_s);
+
+        try std.testing.expect(Static.callbackCalled);
     }
 };

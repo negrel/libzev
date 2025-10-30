@@ -79,6 +79,15 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
                 d.permissions,
             );
         },
+        .close => {
+            const close_op = Op(io.Close).fromHeaderUnsafe(op_h);
+            sqe.prep_close(close_op.data.file);
+        },
+        .pread => {
+            const pread_op = Op(io.PRead).fromHeaderUnsafe(op_h);
+            const d = pread_op.data;
+            sqe.prep_read(d.file, d.buffer[0..d.buffer_len], d.offset);
+        },
     }
     sqe.user_data = @intFromPtr(op_h);
 }
@@ -128,6 +137,77 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
         for (0..done) |i| {
             const cqe = cqes[i];
             const op_h: *io.OpHeader = @ptrFromInt(cqe.user_data);
+
+            switch (op_h.code) {
+                .noop, .timeout => {},
+                .openat => {
+                    const op = Op(io.OpenAt).fromHeaderUnsafe(op_h);
+                    if (cqe.res < 0) {
+                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .INTR => unreachable,
+                            .FAULT => unreachable,
+                            .INVAL => error.BadPathName,
+                            .BADF => unreachable,
+                            .ACCES => error.AccessDenied,
+                            .FBIG => error.FileTooBig,
+                            .OVERFLOW => error.FileTooBig,
+                            .ISDIR => error.IsDir,
+                            .LOOP => error.SymLinkLoop,
+                            .MFILE => error.ProcessFdQuotaExceeded,
+                            .NAMETOOLONG => error.NameTooLong,
+                            .NFILE => error.SystemFdQuotaExceeded,
+                            .NODEV => error.NoDevice,
+                            .NOENT => error.FileNotFound,
+                            .SRCH => error.ProcessNotFound,
+                            .NOMEM => error.SystemResources,
+                            .NOSPC => error.NoSpaceLeft,
+                            .NOTDIR => error.NotDir,
+                            .PERM => error.PermissionDenied,
+                            .EXIST => error.PathAlreadyExists,
+                            .BUSY => error.DeviceBusy,
+                            .OPNOTSUPP => error.FileLocksNotSupported,
+                            .AGAIN => error.WouldBlock,
+                            .TXTBSY => error.FileBusy,
+                            .NXIO => error.NoDevice,
+                            .ILSEQ => |err| if (builtin.os.tag == .wasi)
+                                error.InvalidUtf8
+                            else
+                                posix.unexpectedErrno(err),
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    } else {
+                        op.data.file = cqe.res;
+                    }
+                },
+                .close => {},
+                .pread => {
+                    const op = Op(io.PRead).fromHeaderUnsafe(op_h);
+                    if (cqe.res < 0) {
+                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .INTR => unreachable,
+                            .INVAL => unreachable,
+                            .FAULT => unreachable,
+                            .SRCH => error.ProcessNotFound,
+                            .AGAIN => error.WouldBlock,
+                            .CANCELED => error.Canceled,
+                            // Can be a race condition.
+                            .BADF => error.NotOpenForReading,
+                            .IO => error.InputOutput,
+                            .ISDIR => error.IsDir,
+                            .NOBUFS => error.SystemResources,
+                            .NOMEM => error.SystemResources,
+                            .NOTCONN => error.SocketNotConnected,
+                            .CONNRESET => error.ConnectionResetByPeer,
+                            .TIMEDOUT => error.ConnectionTimedOut,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    } else {
+                        op.data.read = @intCast(cqe.res);
+                    }
+                },
+            }
 
             const op = Op(io.NoOp).fromHeaderUnsafe(op_h);
             op.private.callback(&op.header);
@@ -221,5 +301,8 @@ pub fn OpPrivateData(T: type) type {
     };
 }
 
-pub const noop = io.noOp(Io);
-pub const timeout = io.timeOut(Io);
+pub const noOp = io.noOp(Io);
+pub const timeOut = io.timeOut(Io);
+pub const openAt = io.openAt(Io);
+pub const close = io.close(Io);
+pub const pRead = io.pRead(Io);
