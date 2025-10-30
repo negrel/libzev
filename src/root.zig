@@ -8,6 +8,8 @@ pub const TimeOut = iopkg.TimeOut;
 pub const OpenAt = iopkg.OpenAt;
 pub const Close = iopkg.Close;
 pub const PRead = iopkg.PRead;
+pub const PWrite = iopkg.PWrite;
+pub const FSync = iopkg.FSync;
 
 fn forEachAvailableImpl(tcase: anytype) !void {
     inline for (impl.Impl.available()) |i| {
@@ -164,105 +166,94 @@ test "openat/pread/close" {
     }.tcase);
 }
 
-// test "openat/pwrite/fsync/close" {
-//     try forEachAvailableImpl(struct {
-//         fn tcase(Io: type) !void {
-//             const Static = struct {
-//                 var openAtCalled: bool = undefined;
-//                 var pwriteCalled: bool = undefined;
-//                 var fsyncCalled: bool = undefined;
-//                 var closeCalled: bool = undefined;
-//                 var file: anyerror!std.fs.File = undefined;
-//                 var write: std.fs.File.PWriteError!usize = undefined;
-//                 var fsyncResult: std.fs.File.SyncError!void = undefined;
-//
-//                 fn openAtCallback(iop: *Io.Op) void {
-//                     openAtCalled = true;
-//                     file = iop.data.openat.file;
-//                 }
-//
-//                 fn pwriteCallback(iop: *Io.Op) void {
-//                     pwriteCalled = true;
-//                     write = iop.data.pwrite.write;
-//                 }
-//
-//                 fn fsyncCallback(iop: *Io.Op) void {
-//                     fsyncCalled = true;
-//                     fsyncResult = iop.data.fsync.result;
-//                 }
-//
-//                 fn closeCallback(iop: *Io.Op) void {
-//                     closeCalled = true;
-//                     _ = iop.data.close;
-//                 }
-//             };
-//             Static.openAtCalled = false;
-//             Static.pwriteCalled = false;
-//             Static.closeCalled = false;
-//             Static.file = undefined;
-//             Static.write = undefined;
-//             Static.fsyncResult = undefined;
-//
-//             var io: Io = .{};
-//             try io.init(.{});
-//             defer io.deinit();
-//
-//             const tmpDir = std.testing.tmpDir(.{});
-//
-//             const f = try testutils.openat(
-//                 Io,
-//                 &io,
-//                 tmpDir.dir,
-//                 "./file.txt",
-//                 .{
-//                     .read = true,
-//                     .write = true,
-//                     .create = true,
-//                     .truncate = true,
-//                 },
-//             );
-//
-//             // Write.
-//             {
-//                 var buf: []const u8 = "Hello world!";
-//                 var pwrite = Io.pwrite(f, buf[0..], 0, null, Static.pwriteCallback);
-//
-//                 try io.submit(&pwrite);
-//
-//                 _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
-//
-//                 try std.testing.expect(Static.pwriteCalled);
-//
-//                 const write = try Static.write;
-//
-//                 try std.testing.expect(write == buf.len);
-//
-//                 var rbuf: [64]u8 = undefined;
-//                 const read = try f.pread(rbuf[0..], 0);
-//
-//                 try std.testing.expect(read == 12);
-//                 try std.testing.expectEqualStrings(buf, rbuf[0..read]);
-//             }
-//
-//             // FSync.
-//             {
-//                 var fsync = Io.fsync(f, null, Static.fsyncCallback);
-//
-//                 try io.submit(&fsync);
-//
-//                 _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
-//
-//                 try std.testing.expect(Static.fsyncCalled);
-//
-//                 try Static.fsyncResult;
-//             }
-//
-//             // Close.
-//             try testutils.close(Io, &io, f);
-//         }
-//     }.tcase);
-// }
-//
+test "openat/pwrite/fsync/close" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var pwriteCalled: bool = undefined;
+                var fsyncCalled: bool = undefined;
+                var write: std.fs.File.PWriteError!usize = undefined;
+                var fsyncResult: std.fs.File.SyncError!void = undefined;
+
+                fn pwriteCallback(iop: *Io.Op(PWrite)) callconv(.c) void {
+                    pwriteCalled = true;
+                    write = iop.data.write;
+                }
+
+                fn fsyncCallback(iop: *Io.Op(FSync)) callconv(.c) void {
+                    fsyncCalled = true;
+                    fsyncResult = iop.data.result();
+                }
+            };
+            Static.pwriteCalled = false;
+            Static.write = undefined;
+            Static.fsyncResult = undefined;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            const tmpDir = std.testing.tmpDir(.{});
+
+            const f = try testutils.openAt(
+                &io,
+                .{
+                    .dir = tmpDir.dir,
+                    .path = "./file.txt",
+                    .opts = .{
+                        .read = true,
+                        .write = true,
+                        .create = true,
+                        .truncate = true,
+                    },
+                },
+            );
+
+            // Write.
+            {
+                var buf: []const u8 = "Hello world!";
+                var pwrite = Io.pWrite(.{
+                    .file = f,
+                    .buffer = buf[0..],
+                    .offset = 0,
+                }, null, Static.pwriteCallback);
+
+                try testutils.queue(&io, &pwrite, 1);
+                try testutils.submit(&io, 1);
+                _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
+
+                try std.testing.expect(Static.pwriteCalled);
+
+                const write = try Static.write;
+
+                try std.testing.expect(write == buf.len);
+
+                var rbuf: [64]u8 = undefined;
+                const read = try f.pread(rbuf[0..], 0);
+
+                try std.testing.expect(read == 12);
+                try std.testing.expectEqualStrings(buf, rbuf[0..read]);
+            }
+
+            // FSync.
+            {
+                var fsync = Io.fSync(.{ .file = f }, null, Static.fsyncCallback);
+
+                try testutils.queue(&io, &fsync, 1);
+                try testutils.submit(&io, 1);
+                _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
+
+                try std.testing.expect(Static.fsyncCalled);
+
+                try Static.fsyncResult;
+            }
+
+            // Close.
+            try testutils.close(&io, .{ .file = f });
+        }
+    }.tcase);
+}
+
 // test "openat/stat/close" {
 //     try forEachAvailableImpl(struct {
 //         fn tcase(Io: type) !void {

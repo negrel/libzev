@@ -9,6 +9,8 @@ pub const OpCode = enum(c_int) {
     openat,
     close,
     pread,
+    pwrite,
+    fsync,
 };
 
 /// OpHeader defines field at the beginning of Op(Io, T) that don't depend on
@@ -142,6 +144,58 @@ pub const PRead = extern struct {
     }
 };
 
+pub const PWrite = extern struct {
+    pub const op_code = OpCode.pwrite;
+
+    pub const Intern = struct {
+        file: std.fs.File,
+        buffer: []const u8,
+        offset: u64,
+
+        fn toExtern(self: Intern) PWrite {
+            return .{
+                .file = self.file.handle,
+                .buffer = self.buffer.ptr,
+                .buffer_len = self.buffer.len,
+                .offset = self.offset,
+            };
+        }
+    };
+
+    file: std.fs.File.Handle,
+    buffer: [*c]const u8,
+    buffer_len: usize,
+    offset: u64,
+
+    write: usize = 0,
+    err_code: u16 = 0,
+
+    pub fn result(self: *PWrite) std.fs.File.PWriteError!usize {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+        return self.write;
+    }
+};
+
+pub const FSync = extern struct {
+    pub const op_code = OpCode.fsync;
+
+    pub const Intern = struct {
+        file: std.fs.File,
+
+        pub fn toExtern(self: Intern) FSync {
+            return .{ .file = self.file.handle };
+        }
+    };
+
+    file: std.fs.File.Handle,
+
+    err_code: u16 = 0,
+
+    pub fn result(self: *FSync) std.fs.File.SyncError!void {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+    }
+};
+
 pub fn OpConstructor(Io: type, T: type) type {
     if (@hasDecl(T, "Intern")) {
         return *const fn (
@@ -252,6 +306,48 @@ pub fn pRead(Io: type) OpConstructor(Io, PRead) {
             return .{
                 .data = data.toExtern(),
                 .private = Io.OpPrivateData(PRead).init(.{
+                    .user_data = user_data,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
+                }),
+            };
+        }
+    }.func;
+}
+
+pub fn pWrite(Io: type) OpConstructor(Io, PWrite) {
+    return struct {
+        pub fn func(
+            data: PWrite.Intern,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, PWrite)) callconv(.c) void,
+        ) Op(Io, PWrite) {
+            return .{
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(PWrite).init(.{
+                    .user_data = user_data,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
+                }),
+            };
+        }
+    }.func;
+}
+
+pub fn fSync(Io: type) OpConstructor(Io, FSync) {
+    return struct {
+        pub fn func(
+            data: FSync.Intern,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, FSync)) callconv(.c) void,
+        ) Op(Io, FSync) {
+            return .{
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(FSync).init(.{
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,

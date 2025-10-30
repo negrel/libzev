@@ -88,6 +88,15 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
             const d = pread_op.data;
             sqe.prep_read(d.file, d.buffer[0..d.buffer_len], d.offset);
         },
+        .pwrite => {
+            const pwrite_op = Op(io.PWrite).fromHeaderUnsafe(op_h);
+            const d = pwrite_op.data;
+            sqe.prep_write(d.file, d.buffer[0..d.buffer_len], d.offset);
+        },
+        .fsync => {
+            const fsync_op = Op(io.FSync).fromHeaderUnsafe(op_h);
+            sqe.prep_fsync(fsync_op.data.file, 0);
+        },
     }
     sqe.user_data = @intFromPtr(op_h);
 }
@@ -207,6 +216,51 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                         op.data.read = @intCast(cqe.res);
                     }
                 },
+                .pwrite => {
+                    const op = Op(io.PWrite).fromHeaderUnsafe(op_h);
+                    if (cqe.res < 0) {
+                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .INTR => unreachable,
+                            .INVAL => error.InvalidArgument,
+                            .FAULT => unreachable,
+                            .SRCH => error.ProcessNotFound,
+                            .AGAIN => error.WouldBlock,
+                            // can be a race condition.
+                            .BADF => error.NotOpenForWriting,
+                            // `connect` was never called.
+                            .DESTADDRREQ => unreachable,
+                            .DQUOT => error.DiskQuota,
+                            .FBIG => error.FileTooBig,
+                            .IO => error.InputOutput,
+                            .NOSPC => error.NoSpaceLeft,
+                            .ACCES => error.AccessDenied,
+                            .PERM => error.PermissionDenied,
+                            .PIPE => error.BrokenPipe,
+                            .CONNRESET => error.ConnectionResetByPeer,
+                            .BUSY => error.DeviceBusy,
+                            .NXIO => error.NoDevice,
+                            .MSGSIZE => error.MessageTooBig,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    } else {
+                        op.data.write = @intCast(cqe.res);
+                        op.data.err_code = 0;
+                    }
+                },
+                .fsync => {
+                    const op = Op(io.PWrite).fromHeaderUnsafe(op_h);
+                    if (cqe.res < 0) {
+                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .BADF, .INVAL, .ROFS => unreachable,
+                            .IO => error.InputOutput,
+                            .NOSPC => error.NoSpaceLeft,
+                            .DQUOT => error.DiskQuota,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    }
+                },
             }
 
             const op = Op(io.NoOp).fromHeaderUnsafe(op_h);
@@ -306,3 +360,5 @@ pub const timeOut = io.timeOut(Io);
 pub const openAt = io.openAt(Io);
 pub const close = io.close(Io);
 pub const pRead = io.pRead(Io);
+pub const pWrite = io.pWrite(Io);
+pub const fSync = io.fSync(Io);

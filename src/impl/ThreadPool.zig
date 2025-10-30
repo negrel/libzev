@@ -192,6 +192,26 @@ pub fn OpPrivateData(T: type) type {
                     };
                     d.read = read;
                 },
+                .pwrite => {
+                    const op = self.toOp();
+                    const d = &op.data;
+                    const f: std.fs.File = .{ .handle = d.file };
+                    const write = f.pwrite(
+                        d.buffer[0..d.buffer_len],
+                        d.offset,
+                    ) catch |err| {
+                        d.err_code = @intFromError(err);
+                        return;
+                    };
+                    d.write = write;
+                },
+                .fsync => {
+                    const op = self.toOp();
+                    const f: std.fs.File = .{ .handle = op.data.file };
+                    f.sync() catch |err| {
+                        op.data.err_code = @intFromError(err);
+                    };
+                },
             }
         }
 
@@ -206,3 +226,5 @@ pub const timeOut = io.timeOut(Io);
 pub const openAt = io.openAt(Io);
 pub const close = io.close(Io);
 pub const pRead = io.pRead(Io);
+pub const pWrite = io.pWrite(Io);
+pub const fSync = io.fSync(Io);
