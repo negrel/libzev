@@ -11,10 +11,10 @@ const ThreadPool = @import("./ThreadPool.zig");
 const Io = @This();
 
 ring: linux.IoUring = undefined,
-
 // Number of entry submitted to the kernel and not polled (yet).
 active: u32 = 0,
-
+// Number of entry in the submission queue (but not submitted).
+sqe_len: u32 = 0,
 // Blocking task not supported by io_uring run on the thread pool.
 tpool: ThreadPool = undefined,
 
@@ -33,42 +33,20 @@ pub fn deinit(self: *Io) void {
     self.ring.deinit();
 }
 
-pub fn submit(self: *Io, iop: anytype) !void {
-    try self.submitBatch(io.Batch.from(iop));
+pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
+    try self.queueOpHeader(&op.header);
+    self.sqe_len += 1;
+    return self.sqe_len;
 }
 
-pub fn submitBatch(self: *Io, batch: io.Batch) !void {
-    var b = batch;
-    while (b.pop()) |op_h| {
-        self.enqueue(op_h) catch |err| switch (err) {
-            error.SubmissionQueueFull => {
-                try self.submitSQ();
-                self.enqueue(op_h) catch unreachable;
-            },
-        };
-    }
-
-    try self.submitSQ();
-}
-
-fn submitSQ(self: *Io) !void {
-    while (true) {
-        self.active += self.ring.submit() catch |err| switch (err) {
-            error.SignalInterrupt => continue,
-            else => return err,
-        };
-        return;
-    }
-}
-
-fn enqueue(self: *Io, iop: *io.OpHeader) !void {
+fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
     const sqe = try self.ring.get_sqe();
 
     // Prepare entry.
-    switch (iop.code) {
+    switch (op_h.code) {
         .noop => sqe.prep_nop(),
         .timeout => {
-            const timeout_op = Op(io.TimeOut).fromHeaderUnsafe(iop);
+            const timeout_op = Op(io.TimeOut).fromHeaderUnsafe(op_h);
             timeout_op.private.uring_data = msToTimespec(timeout_op.data.ms);
 
             sqe.prep_timeout(
@@ -77,8 +55,59 @@ fn enqueue(self: *Io, iop: *io.OpHeader) !void {
                 linux.IORING_TIMEOUT_ABS,
             );
         },
+        .openat => {
+            const openat_op = Op(io.OpenAt).fromHeaderUnsafe(op_h);
+            const d = openat_op.data;
+            const opts = d.opts;
+            var os_flags: posix.O = .{
+                .CLOEXEC = true,
+                .APPEND = opts.append,
+                .TRUNC = opts.truncate,
+                .CREAT = opts.create or opts.create_new,
+                .EXCL = opts.create_new,
+                .ACCMODE = .RDONLY,
+            };
+            if (opts.write) {
+                if (opts.read) os_flags.ACCMODE = .RDWR else {
+                    os_flags.ACCMODE = .WRONLY;
+                }
+            }
+            sqe.prep_openat(
+                linux.AT.FDCWD,
+                d.path,
+                os_flags,
+                d.permissions,
+            );
+        },
     }
-    sqe.user_data = @intFromPtr(iop);
+    sqe.user_data = @intFromPtr(op_h);
+}
+
+pub fn submit(self: *Io) io.SubmitError!u32 {
+    var submitted: u32 = 0;
+    while (true) {
+        submitted += self.ring.submit() catch |err| switch (err) {
+            error.SignalInterrupt => continue,
+            error.SystemResources => return error.SystemResources,
+            error.CompletionQueueOvercommitted => {
+                return error.CompletionQueueOvercommitted;
+            },
+            error.SubmissionQueueEntryInvalid => return error.InvalidOp,
+            error.FileDescriptorInvalid,
+            error.FileDescriptorInBadState,
+            error.BufferInvalid,
+            error.RingShuttingDown,
+            error.OpcodeNotSupported,
+            error.Unexpected,
+            => {
+                return io.SubmitError.Unexpected;
+            },
+        };
+
+        self.sqe_len -= submitted;
+        self.active += submitted;
+        return submitted;
+    }
 }
 
 pub fn poll(self: *Io, mode: io.PollMode) !u32 {
@@ -106,6 +135,10 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                 },
                 .timeout => {
                     const op = Op(io.TimeOut).fromHeaderUnsafe(op_h);
+                    op.private.callback(op.data);
+                },
+                .openat => {
+                    const op = Op(io.OpenAt).fromHeaderUnsafe(op_h);
                     op.private.callback(op.data);
                 },
             }
@@ -171,5 +204,5 @@ pub fn OpPrivateData(T: type) type {
     };
 }
 
-pub const noop = io.noop(Io);
-pub const timeout = io.timeout(Io);
+pub const noop = io.noOp(Io);
+pub const timeout = io.timeOut(Io);

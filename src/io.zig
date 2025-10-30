@@ -52,6 +52,32 @@ pub const TimeOut = extern struct {
     ms: u64,
 };
 
+pub const OpenAt = extern struct {
+    pub const op_code = OpCode.openat;
+
+    pub const Options = extern struct {
+        read: bool = true,
+        write: bool = false,
+        append: bool = false,
+        truncate: bool = false,
+        create_new: bool = false,
+        create: bool = true,
+    };
+
+    dir: std.fs.File.Handle,
+    path: [*c]const u8,
+    opts: Options,
+    permissions: u32 = 0o0666,
+
+    file: std.fs.File.Handle = -1,
+    err_code: usize = 0,
+
+    pub fn result(self: *OpenAt) std.fs.File.OpenError!std.fs.File {
+        if (self.err_code != 0) return @errorFromInt(self.err_code);
+        return .{ .handle = self.file };
+    }
+};
+
 pub fn OpConstructor(Io: type, T: type) type {
     return *const fn (
         T,
@@ -60,7 +86,7 @@ pub fn OpConstructor(Io: type, T: type) type {
     ) Op(Io, T);
 }
 
-pub fn noop(Io: type) OpConstructor(Io, NoOp) {
+pub fn noOp(Io: type) OpConstructor(Io, NoOp) {
     return struct {
         pub fn func(
             data: NoOp,
@@ -78,7 +104,7 @@ pub fn noop(Io: type) OpConstructor(Io, NoOp) {
     }.func;
 }
 
-pub fn timeout(Io: type) OpConstructor(Io, TimeOut) {
+pub fn timeOut(Io: type) OpConstructor(Io, TimeOut) {
     return struct {
         pub fn func(
             data: TimeOut,
@@ -96,45 +122,44 @@ pub fn timeout(Io: type) OpConstructor(Io, TimeOut) {
     }.func;
 }
 
-pub const Batch = struct {
-    const Self = @This();
-
-    first: ?*OpHeader = null,
-
-    pub fn from(op: anytype) Self {
-        var self: Self = .{};
-        self.push(op);
-        return self;
-    }
-
-    pub fn push(self: *Self, op: anytype) void {
-        std.debug.assert(@typeInfo(@TypeOf(op)) == .pointer);
-        self.pushHeader(&op.header);
-    }
-
-    pub fn pushHeader(self: *Self, op_h: *OpHeader) void {
-        op_h.next = self.first;
-        self.first = op_h;
-    }
-
-    pub fn pop(self: *Self) ?*OpHeader {
-        if (self.first) |op_h| {
-            self.first = op_h.next;
-            return op_h;
+pub fn openAt(Io: type) OpConstructor(Io, OpenAt) {
+    return struct {
+        pub fn func(
+            data: OpenAt,
+            user_data: ?*anyopaque,
+            callback: *const fn (OpenAt) callconv(.c) void,
+        ) Op(Io, OpenAt) {
+            return .{
+                .data = data,
+                .private = Io.OpPrivateData(OpenAt).init(.{
+                    .user_data = user_data,
+                    .callback = callback,
+                }),
+            };
         }
-        return null;
-    }
-};
+    }.func;
+}
 
-/// open() I/O operation options.
-pub const OpenOptions = struct {
-    read: bool = true,
-    write: bool = false,
-    append: bool = false,
-    truncate: bool = false,
-    create_new: bool = false,
-    create: bool = true,
-    mode: u32 = 0o0666,
+pub const QueueError = error{SubmissionQueueFull};
+
+pub const SubmitError = error{
+    // The kernel was unable to allocate memory or ran out of resources for the
+    // request.
+    // The application should wait for some completions and try again:
+    SystemResources,
+    // The application attempted to overcommit the number of requests it can
+    // have pending.
+    // The application should wait for some completions and try again:
+    CompletionQueueOvercommitted,
+    // The submitted operation is malformed/invalid.
+    InvalidOp,
+    // The Operating System returned an undocumented error code.
+    // This error is in theory not possible, but it would be better to handle
+    // this error than to invoke undefined behavior.
+    // When this error code is observed, it usually means the libzev needs a
+    // small patch to add the error code to the error set for the respective
+    // function.
+    Unexpected,
 };
 
 /// Io.poll() mode.

@@ -13,6 +13,7 @@ const Io = @This();
 tpool: ThreadPool = undefined,
 completed: queue_mpsc.Intrusive(io.OpHeader) = undefined,
 active: std.atomic.Value(u32) = .init(0),
+batch: ThreadPool.Batch = .{},
 
 pub fn init(self: *Io, opts: Options) !void {
     self.* = .{};
@@ -25,28 +26,29 @@ pub fn deinit(self: *Io) void {
     self.tpool.deinit();
 }
 
-pub fn submit(self: *Io, iop: anytype) !void {
-    try self.submitBatch(io.Batch.from(iop));
-}
-
-pub fn submitBatch(self: *Io, batch: io.Batch) !void {
-    var tpoll_batch: ThreadPool.Batch = .{};
-
-    var b = batch;
-    var submitted: u32 = 0;
-
-    while (b.pop()) |op_h| {
-        const op: *Op(io.NoOp) = @ptrCast(@alignCast(op_h));
-        op.private.io = self;
-        op.private.task.node = .{};
-
-        tpoll_batch.push(ThreadPool.Batch.from(&op.private.task));
-        submitted += 1;
+pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
+    if (self.batch.len + 1 == std.math.maxInt(u32)) {
+        return io.QueueError.SubmissionQueueFull;
     }
 
-    _ = self.active.fetchAdd(submitted, .seq_cst);
+    const op_h: *io.OpHeader = &op.header;
+    const no_op: *Op(io.NoOp) = @ptrCast(@alignCast(op_h));
+    no_op.private.io = self;
+    no_op.private.task.node = .{};
 
-    self.tpool.schedule(tpoll_batch);
+    self.batch.push(ThreadPool.Batch.from(&no_op.private.task));
+
+    return @intCast(self.batch.len);
+}
+
+pub fn submit(self: *Io) io.SubmitError!u32 {
+    const submitted: u32 = @intCast(self.batch.len);
+
+    self.tpool.schedule(self.batch);
+    self.batch = .{};
+
+    _ = self.active.fetchAdd(submitted, .seq_cst);
+    return @intCast(submitted);
 }
 
 pub fn poll(self: *Io, mode: io.PollMode) !u32 {
@@ -140,6 +142,31 @@ pub fn OpPrivateData(T: type) type {
                 .timeout => std.Thread.sleep(
                     self.toOp().data.ms * std.time.ns_per_ms,
                 ),
+                .openat => {
+                    const op = self.toOp();
+                    const d = op.data;
+
+                    if (d.opts.create or d.opts.create_new) {
+                        self.data.openat.file = d.dir.createFileZ(d.path, .{
+                            .read = d.opts.read,
+                            .truncate = d.opts.truncate,
+                            .exclusive = d.opts.create_new,
+                            .mode = d.opts.mode,
+                        });
+                    } else {
+                        var mode: std.fs.File.OpenMode = .read_only;
+                        if (d.opts.write) {
+                            if (d.opts.read) {
+                                mode = .read_write;
+                            } else {
+                                mode = .write_only;
+                            }
+                        }
+                        d.file = d.dir.openFileZ(d.path, .{
+                            .mode = mode,
+                        });
+                    }
+                },
             }
         }
 
@@ -149,5 +176,5 @@ pub fn OpPrivateData(T: type) type {
     };
 }
 
-pub const noop = io.noop(Io);
-pub const timeout = io.timeout(Io);
+pub const noop = io.noOp(Io);
+pub const timeout = io.timeOut(Io);
