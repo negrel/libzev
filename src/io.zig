@@ -3,18 +3,127 @@
 
 const std = @import("std");
 
-/// I/O operation code.
 pub const OpCode = enum(c_int) {
-    noop = 0,
-    timeout = 1,
-    openat = 2,
-    close = 3,
-    pread = 4,
-    pwrite = 5,
-    fsync = 6,
-    stat = 7,
-    getcwd = 8,
-    chdir = 9,
+    noop,
+    timeout,
+    openat,
+};
+
+/// OpHeader defines field at the beginning of Op(Io, T) that don't depend on
+/// Io and T. It is always safe to read OpHeader even if Io and T are unknown.
+pub const OpHeader = extern struct {
+    code: OpCode,
+    next: ?*OpHeader = null,
+};
+
+/// Op defines an I/O operation structure. It is made of a static header and
+/// Io / T dependent fields:
+///
+/// +----------+---------------+
+/// | OpHeader | OpBody(Io, T) |
+/// +----------+---------------+
+///
+pub fn Op(Io: type, T: type) type {
+    return extern struct {
+        const Impl = Io;
+        const op_code = T.op_code;
+
+        header: OpHeader = .{ .code = op_code },
+
+        // Implementation specific fields.
+        private: Impl.OpPrivateData(T),
+
+        // Operation data.
+        data: T,
+
+        pub fn fromHeaderUnsafe(h: *OpHeader) *Op(Io, T) {
+            return @fieldParentPtr("header", h);
+        }
+    };
+}
+
+pub const NoOp = extern struct {
+    pub const op_code = OpCode.noop;
+};
+
+pub const TimeOut = extern struct {
+    pub const op_code = OpCode.timeout;
+
+    ms: u64,
+};
+
+pub fn OpConstructor(Io: type, T: type) type {
+    return *const fn (
+        T,
+        user_data: ?*anyopaque,
+        callback: *const fn (T) callconv(.c) void,
+    ) Op(Io, T);
+}
+
+pub fn noop(Io: type) OpConstructor(Io, NoOp) {
+    return struct {
+        pub fn func(
+            data: NoOp,
+            user_data: ?*anyopaque,
+            callback: *const fn (NoOp) callconv(.c) void,
+        ) Op(Io, NoOp) {
+            return .{
+                .data = data,
+                .private = Io.OpPrivateData(NoOp).init(.{
+                    .user_data = user_data,
+                    .callback = callback,
+                }),
+            };
+        }
+    }.func;
+}
+
+pub fn timeout(Io: type) OpConstructor(Io, TimeOut) {
+    return struct {
+        pub fn func(
+            data: TimeOut,
+            user_data: ?*anyopaque,
+            callback: *const fn (TimeOut) callconv(.c) void,
+        ) Op(Io, TimeOut) {
+            return .{
+                .data = data,
+                .private = Io.OpPrivateData(TimeOut).init(.{
+                    .user_data = user_data,
+                    .callback = callback,
+                }),
+            };
+        }
+    }.func;
+}
+
+pub const Batch = struct {
+    const Self = @This();
+
+    first: ?*OpHeader = null,
+
+    pub fn from(op: anytype) Self {
+        var self: Self = .{};
+        self.push(op);
+        return self;
+    }
+
+    pub fn push(self: *Self, op: anytype) void {
+        std.debug.assert(@typeInfo(@TypeOf(op)) == .pointer);
+        self.pushHeader(&op.header);
+    }
+
+    pub fn pushHeader(self: *Self, op_h: *OpHeader) void {
+        op_h.next = self.first;
+        self.first = op_h;
+    }
+
+    pub fn pop(self: *Self) ?*OpHeader {
+        if (self.first) |op_h| {
+            self.first = op_h.next;
+            return op_h;
+        }
+        return null;
+    }
 };
 
 /// open() I/O operation options.
@@ -28,11 +137,6 @@ pub const OpenOptions = struct {
     mode: u32 = 0o0666,
 };
 
-/// Callback type for given implementation.
-pub fn Callback(Io: type) type {
-    return *const fn (*Io.Op) void;
-}
-
 /// Io.poll() mode.
 pub const PollMode = enum(c_int) {
     /// Poll events until all I/O operations complete.
@@ -42,30 +146,6 @@ pub const PollMode = enum(c_int) {
     /// Poll events I/O operation if any without blocking.
     nowait = 2,
 };
-
-pub fn Batch(Io: type) type {
-    return struct {
-        const Self = @This();
-        pub const Node = std.SinglyLinkedList.Node;
-
-        list: std.SinglyLinkedList = .{},
-
-        pub fn from(op: *Io.Op) Self {
-            var self: Self = .{ .list = .{} };
-            self.push(op);
-            return self;
-        }
-
-        pub fn push(self: *Self, op: *Io.Op) void {
-            self.list.prepend(&op.node);
-        }
-
-        pub fn pop(self: *Self) ?*Io.Op {
-            const n = self.list.popFirst() orelse return null;
-            return @alignCast(@fieldParentPtr("node", n));
-        }
-    };
-}
 
 pub const GetCwdError = error{
     CurrentWorkingDirectoryUnlinked,

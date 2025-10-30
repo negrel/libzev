@@ -8,37 +8,39 @@ const io = @import("../io.zig");
 const queue_mpsc = @import("../queue_mpsc.zig");
 const ThreadPool = @import("../ThreadPool.zig");
 
-const Self = @This();
-const Io = Self;
+const Io = @This();
 
 tpool: ThreadPool = undefined,
-completed: queue_mpsc.Intrusive(Op) = undefined,
+completed: queue_mpsc.Intrusive(io.OpHeader) = undefined,
 active: std.atomic.Value(u32) = .init(0),
 
-pub fn init(self: *Self, opts: Options) !void {
+pub fn init(self: *Io, opts: Options) !void {
     self.* = .{};
     self.tpool = .init(opts);
     self.completed.init();
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Io) void {
     self.tpool.shutdown();
     self.tpool.deinit();
 }
 
-pub fn submit(self: *Self, iop: *Op) !void {
-    try self.submitBatch(Batch.from(iop));
+pub fn submit(self: *Io, iop: anytype) !void {
+    try self.submitBatch(io.Batch.from(iop));
 }
 
-pub fn submitBatch(self: *Self, batch: Batch) !void {
+pub fn submitBatch(self: *Io, batch: io.Batch) !void {
     var tpoll_batch: ThreadPool.Batch = .{};
 
     var b = batch;
     var submitted: u32 = 0;
-    while (b.pop()) |iop| {
-        iop.io = self;
-        iop.task.node = .{};
-        tpoll_batch.push(ThreadPool.Batch.from(&iop.task));
+
+    while (b.pop()) |op_h| {
+        const op: *Op(io.NoOp) = @ptrCast(@alignCast(op_h));
+        op.private.io = self;
+        op.private.task.node = .{};
+
+        tpoll_batch.push(ThreadPool.Batch.from(&op.private.task));
         submitted += 1;
     }
 
@@ -47,7 +49,7 @@ pub fn submitBatch(self: *Self, batch: Batch) !void {
     self.tpool.schedule(tpoll_batch);
 }
 
-pub fn poll(self: *Self, mode: io.PollMode) !u32 {
+pub fn poll(self: *Io, mode: io.PollMode) !u32 {
     const active = self.active.load(.seq_cst);
 
     if (active > 0) {
@@ -66,186 +68,86 @@ pub fn poll(self: *Self, mode: io.PollMode) !u32 {
     }
 
     var done: u32 = 0;
-    while (self.completed.pop()) |op| {
-        op.callback(op);
+    while (self.completed.pop()) |op_h| {
+        const op: *Op(io.NoOp) = @ptrCast(@alignCast(op_h));
+        op.private.doCallback();
         done += 1;
     }
 
     return done;
 }
 
-pub fn noop(
-    user_data: ?*anyopaque,
-    callback: *const fn (*Op) void,
-) Op {
-    return .{
-        .data = .{ .noop = undefined },
-        .user_data = user_data,
-        .callback = callback,
-    };
-}
-
-pub fn timeout(
-    ms: u64,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Op) void,
-) Op {
-    return .{
-        .data = .{ .timeout = .{ .ms = ms } },
-        .user_data = user_data,
-        .callback = callback,
-    };
-}
-
-pub fn openat(
-    dir: std.fs.Dir,
-    path: [:0]const u8,
-    opts: io.OpenOptions,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Op) void,
-) Op {
-    return .{
-        .data = .{ .openat = .{
-            .dir = dir,
-            .path = path,
-            .opts = opts,
-        } },
-        .user_data = user_data,
-        .callback = callback,
-    };
-}
-
-pub const close = io.close(Self);
-pub const pread = io.pread(Self);
-pub const pwrite = io.pwrite(Self);
-pub const fsync = io.fsync(Self);
-pub const stat = io.stat(Self);
-
-pub fn getcwd(
-    buffer: []u8,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Op) void,
-) Op {
-    return .{
-        .data = .{ .getcwd = .{ .buffer = buffer } },
-        .user_data = user_data,
-        .callback = callback,
-    };
-}
-
-pub fn chdir(
-    dir: []const u8,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Op) void,
-) Op {
-    return .{
-        .data = .{ .chdir = .{ .dir = dir } },
-        .user_data = user_data,
-        .callback = callback,
-    };
-}
-
-pub const Op = struct {
-    io: *Io = undefined,
-    data: union(io.OpCode) {
-        noop: void,
-        timeout: struct { ms: u64 },
-        openat: struct {
-            dir: std.fs.Dir,
-            path: [*:0]const u8,
-            opts: io.OpenOptions,
-            file: std.fs.File.OpenError!std.fs.File = undefined,
-        },
-        close: struct { file: std.fs.File },
-        pread: struct {
-            file: std.fs.File,
-            buffer: []u8,
-            offset: u64,
-            read: std.fs.File.PReadError!usize = undefined,
-        },
-        pwrite: struct {
-            file: std.fs.File,
-            buffer: []const u8,
-            offset: u64,
-            write: std.fs.File.PWriteError!usize = undefined,
-        },
-        fsync: struct {
-            file: std.fs.File,
-            result: std.fs.File.SyncError!void = undefined,
-        },
-        stat: struct {
-            file: std.fs.File,
-            stat: std.fs.File.StatError!std.fs.File.Stat = undefined,
-        },
-        getcwd: struct {
-            buffer: []u8,
-            cwd: io.GetCwdError![]u8 = undefined,
-        },
-        chdir: struct {
-            dir: []const u8,
-            result: std.posix.ChangeCurDirError!void = undefined,
-        },
-    },
-    callback: *const fn (*Op) void,
-    user_data: ?*anyopaque,
-
-    task: ThreadPool.Task = .{
-        .node = .{},
-        .callback = struct {
-            fn cb(t: *ThreadPool.Task) void {
-                const op: *Op = @alignCast(@fieldParentPtr("task", t));
-                op.blocking();
-
-                const i: *Io = op.io;
-
-                i.completed.push(op);
-                _ = i.active.fetchSub(1, .seq_cst);
-                std.Thread.Futex.wake(&i.active, 1);
-            }
-        }.cb,
-    },
-
-    // Intrusive batch node field.
-    node: Batch.Node = .{},
-
-    // Intrusive MPSC queue next field.
-    next: ?*Op = null,
-
-    fn blocking(self: *Op) void {
-        switch (self.data) {
-            .noop => {},
-            .timeout => |d| std.Thread.sleep(d.ms * std.time.ns_per_ms),
-            .openat => |*d| {
-                if (d.opts.create or d.opts.create_new) {
-                    self.data.openat.file = d.dir.createFileZ(d.path, .{
-                        .read = d.opts.read,
-                        .truncate = d.opts.truncate,
-                        .exclusive = d.opts.create_new,
-                        .mode = d.opts.mode,
-                    });
-                } else {
-                    var mode: std.fs.File.OpenMode = .read_only;
-                    if (d.opts.write) {
-                        if (d.opts.read) {
-                            mode = .read_write;
-                        } else {
-                            mode = .write_only;
-                        }
-                    }
-                    d.file = d.dir.openFileZ(d.path, .{
-                        .mode = mode,
-                    });
-                }
-            },
-            .close => |d| d.file.close(),
-            .pread => |*d| d.read = d.file.pread(d.buffer, d.offset),
-            .pwrite => |*d| d.write = d.file.pwrite(d.buffer, d.offset),
-            .fsync => |*d| d.result = d.file.sync(),
-            .stat => |*d| d.stat = d.file.stat(),
-            .getcwd => |*d| d.cwd = std.process.getCwd(d.buffer),
-            .chdir => |*d| d.result = std.process.changeCurDir(d.dir),
-        }
+comptime {
+    // Safety: ensure we can cast *io.OpHeader to *Op(NoOp) to retrieve
+    // OpPrivateData.
+    if (@offsetOf(Op(io.NoOp), "private") !=
+        @offsetOf(Op(io.TimeOut), "private"))
+    {
+        @compileError("ThreadPool.OpPrivateData depends on T");
     }
-};
+}
+
 pub const Options = ThreadPool.Config;
-pub const Batch = io.Batch(Self);
+
+pub fn Op(T: type) type {
+    return io.Op(Io, T);
+}
+
+/// I/O operation data specific to this ThreadPool.
+pub fn OpPrivateData(T: type) type {
+    return extern struct {
+        io: *Io = undefined,
+
+        task: ThreadPool.Task = .{
+            .node = .{},
+            .callback = struct {
+                fn cb(t: *ThreadPool.Task) callconv(.c) void {
+                    const private: *OpPrivateData(T) = @alignCast(
+                        @fieldParentPtr("task", t),
+                    );
+
+                    private.doBlocking();
+
+                    const i: *Io = private.io;
+
+                    i.completed.push(&private.toOp().header);
+                    _ = i.active.fetchSub(1, .seq_cst);
+                    std.Thread.Futex.wake(&i.active, 1);
+                }
+            }.cb,
+        },
+
+        // queue_mpsc intrusive field.
+        next: ?*OpPrivateData(T) = null,
+
+        callback: *const fn (T) callconv(.c) void,
+        user_data: ?*anyopaque,
+
+        pub fn init(opts: anytype) OpPrivateData(T) {
+            return .{
+                .callback = opts.callback,
+                .user_data = opts.user_data,
+            };
+        }
+
+        fn toOp(self: *OpPrivateData(T)) *Op(T) {
+            return @alignCast(@fieldParentPtr("private", self));
+        }
+
+        fn doBlocking(self: *OpPrivateData(T)) void {
+            switch (T.op_code) {
+                .noop => {},
+                .timeout => std.Thread.sleep(
+                    self.toOp().data.ms * std.time.ns_per_ms,
+                ),
+            }
+        }
+
+        pub fn doCallback(self: *OpPrivateData(T)) void {
+            self.callback(self.toOp().data);
+        }
+    };
+}
+
+pub const noop = io.noop(Io);
+pub const timeout = io.timeout(Io);

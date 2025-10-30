@@ -29,8 +29,3 @@ pub const Impl = enum {
         };
     }
 };
-
-/// Union of implementation specific options.
-pub const Options = union(Impl) {
-    io_uring: IoUring.Options,
-};

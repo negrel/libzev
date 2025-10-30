@@ -100,9 +100,9 @@ pub fn deinit(self: *ThreadPool) void {
 
 /// A Task represents the unit of Work / Job / Execution that the ThreadPool schedules.
 /// The user provides a `callback` which is invoked when the *Task can run on a thread.
-pub const Task = struct {
+pub const Task = extern struct {
     node: Node = .{},
-    callback: *const fn (*Task) void,
+    callback: *const fn (*Task) callconv(.c) void,
 };
 
 /// An unordered collection of Tasks which can be submitted for scheduling as a group.
@@ -521,7 +521,7 @@ const Event = struct {
 };
 
 /// Linked list intrusive memory node and lock-free data structures to operate with it
-const Node = struct {
+const Node = extern struct {
     next: ?*Node = null,
 
     /// A linked list of Nodes
@@ -832,7 +832,7 @@ test "ThreadPool" {
     const Static = struct {
         var done: std.atomic.Value(u32) = .init(0);
 
-        fn callback(_: *ThreadPool.Task) void {
+        fn callback(_: *ThreadPool.Task) callconv(.c) void {
             std.Thread.yield() catch {};
             _ = done.fetchAdd(1, .seq_cst);
         }
