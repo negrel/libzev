@@ -11,7 +11,7 @@ const ThreadPool = @import("../ThreadPool.zig");
 const Io = @This();
 
 tpool: ThreadPool = undefined,
-completed: queue_mpsc.Intrusive(io.OpHeader) = undefined,
+completed: queue_mpsc.Intrusive(OpPrivateData(io.NoOp)) = undefined,
 active: std.atomic.Value(u32) = .init(0),
 batch: ThreadPool.Batch = .{},
 
@@ -70,23 +70,13 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
     }
 
     var done: u32 = 0;
-    while (self.completed.pop()) |op_h| {
-        const op: *Op(io.NoOp) = @ptrCast(@alignCast(op_h));
+    while (self.completed.pop()) |priv| {
+        const op: *Op(io.NoOp) = @fieldParentPtr("private", priv);
         op.private.doCallback();
         done += 1;
     }
 
     return done;
-}
-
-comptime {
-    // Safety: ensure we can cast *io.OpHeader to *Op(NoOp) to retrieve
-    // OpPrivateData.
-    if (@offsetOf(Op(io.NoOp), "private") !=
-        @offsetOf(Op(io.TimeOut), "private"))
-    {
-        @compileError("Op(ThreadPool, T).private offset depends on T");
-    }
 }
 
 pub const Options = ThreadPool.Config;
@@ -112,7 +102,7 @@ pub fn OpPrivateData(T: type) type {
 
                     const i: *Io = private.io;
 
-                    i.completed.push(&private.toOp().header);
+                    i.completed.push(@ptrCast(@alignCast(private)));
                     _ = i.active.fetchSub(1, .seq_cst);
                     std.Thread.Futex.wake(&i.active, 1);
                 }

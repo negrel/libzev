@@ -19,7 +19,6 @@ pub const OpCode = enum(c_int) {
 /// Io and T. It is always safe to read OpHeader even if Io and T are unknown.
 pub const OpHeader = extern struct {
     code: OpCode,
-    next: ?*OpHeader = null,
 };
 
 /// Op defines an I/O operation structure. It is made of a static header and
