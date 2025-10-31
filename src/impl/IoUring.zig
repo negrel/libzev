@@ -97,6 +97,17 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
             const fsync_op = Op(io.FSync).fromHeaderUnsafe(op_h);
             sqe.prep_fsync(fsync_op.data.file, 0);
         },
+        .stat => {
+            const stat_op = Op(io.Stat).fromHeaderUnsafe(op_h);
+            sqe.prep_statx(
+                stat_op.data.file,
+                "",
+                linux.AT.EMPTY_PATH,
+                linux.STATX_TYPE | linux.STATX_MODE | linux.STATX_ATIME |
+                    linux.STATX_MTIME | linux.STATX_CTIME,
+                &stat_op.private.uring_data,
+            );
+        },
     }
     sqe.user_data = @intFromPtr(op_h);
 }
@@ -261,6 +272,29 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                         });
                     }
                 },
+                .stat => {
+                    const op = Op(io.Stat).fromHeaderUnsafe(op_h);
+                    if (cqe.res < 0) {
+                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .ACCES => unreachable,
+                            .BADF => unreachable,
+                            .FAULT => unreachable,
+                            .INVAL => unreachable,
+                            .LOOP => unreachable,
+                            .NAMETOOLONG => unreachable,
+                            .NOENT => unreachable,
+                            .NOMEM => error.SystemResources,
+                            .NOTDIR => unreachable,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    } else {
+                        const std_stat = std.fs.File.Stat.fromLinux(
+                            op.private.uring_data,
+                        );
+                        op.data.stat = .fromStdFsFileStat(std_stat);
+                    }
+                },
             }
 
             const op = Op(io.NoOp).fromHeaderUnsafe(op_h);
@@ -336,6 +370,8 @@ pub fn Op(T: type) type {
 pub fn OpPrivateData(T: type) type {
     const UringData = if (T.op_code == io.OpCode.timeout) T: {
         break :T linux.kernel_timespec;
+    } else if (T.op_code == io.OpCode.stat) T: {
+        break :T linux.Statx;
     } else void;
 
     return extern struct {
@@ -362,3 +398,4 @@ pub const close = io.close(Io);
 pub const pRead = io.pRead(Io);
 pub const pWrite = io.pWrite(Io);
 pub const fSync = io.fSync(Io);
+pub const stat = io.stat(Io);

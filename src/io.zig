@@ -11,6 +11,7 @@ pub const OpCode = enum(c_int) {
     pread,
     pwrite,
     fsync,
+    stat,
 };
 
 /// OpHeader defines field at the beginning of Op(Io, T) that don't depend on
@@ -41,7 +42,7 @@ pub fn Op(Io: type, T: type) type {
         data: T,
 
         pub fn fromHeaderUnsafe(h: *OpHeader) *Op(Io, T) {
-            return @fieldParentPtr("header", h);
+            return @alignCast(@fieldParentPtr("header", h));
         }
     };
 }
@@ -193,6 +194,85 @@ pub const FSync = extern struct {
 
     pub fn result(self: *FSync) std.fs.File.SyncError!void {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+    }
+};
+
+pub const Stat = extern struct {
+    pub const op_code = OpCode.stat;
+
+    pub const Intern = struct {
+        file: std.fs.File,
+
+        pub fn toExtern(self: Intern) Stat {
+            return .{ .file = self.file.handle };
+        }
+    };
+
+    file: std.fs.File.Handle,
+
+    err_code: u16 = 0,
+    stat: FileStat = undefined,
+
+    pub fn result(self: *Stat) std.fs.File.StatError!FileStat {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+        return self.stat;
+    }
+};
+
+pub const FileStat = extern struct {
+    const FileKind = enum(c_int) {
+        block_device = @intFromEnum(std.fs.File.Kind.block_device),
+        character_device = @intFromEnum(std.fs.File.Kind.character_device),
+        directory = @intFromEnum(std.fs.File.Kind.directory),
+        named_pipe = @intFromEnum(std.fs.File.Kind.named_pipe),
+        sym_link = @intFromEnum(std.fs.File.Kind.sym_link),
+        file = @intFromEnum(std.fs.File.Kind.file),
+        unix_domain_socket = @intFromEnum(std.fs.File.Kind.unix_domain_socket),
+        whiteout = @intFromEnum(std.fs.File.Kind.whiteout),
+        door = @intFromEnum(std.fs.File.Kind.door),
+        event_port = @intFromEnum(std.fs.File.Kind.event_port),
+        unknown = @intFromEnum(std.fs.File.Kind.unknown),
+
+        comptime {
+            std.debug.assert(@typeInfo(@This()).@"enum".fields.len ==
+                @typeInfo(std.fs.File.Kind).@"enum".fields.len);
+        }
+    };
+
+    /// A number that the system uses to point to the file metadata. This
+    /// number is not guaranteed to be unique across time, as some file
+    /// systems may reuse an inode after its file has been deleted. Some
+    /// systems may change the inode of a file over time.
+    ///
+    /// On Linux, the inode is a structure that stores the metadata, and
+    /// the inode _number_ is what you see here: the index number of the
+    /// inode.
+    ///
+    /// The FileIndex on Windows is similar. It is a number for a file that
+    /// is unique to each filesystem.
+    inode: std.fs.File.INode,
+    size: u64,
+    /// This is available on POSIX systems and is always 0 otherwise.
+    mode: std.fs.File.Mode,
+    kind: FileKind,
+
+    /// Last access time in nanoseconds, relative to UTC 1970-01-01.
+    atime: i128,
+    /// Last modification time in nanoseconds, relative to UTC 1970-01-01.
+    mtime: i128,
+    /// Last status/metadata change time in nanoseconds, relative to UTC 1970-01-01.
+    ctime: i128,
+
+    pub fn fromStdFsFileStat(s: std.fs.File.Stat) FileStat {
+        return .{
+            .inode = s.inode,
+            .size = s.size,
+            .mode = s.mode,
+            .kind = @enumFromInt(@as(c_int, @intFromEnum(s.kind))),
+            .atime = s.atime,
+            .mtime = s.mtime,
+            .ctime = s.ctime,
+        };
     }
 };
 
@@ -359,6 +439,27 @@ pub fn fSync(Io: type) OpConstructor(Io, FSync) {
     }.func;
 }
 
+pub fn stat(Io: type) OpConstructor(Io, Stat) {
+    return struct {
+        pub fn func(
+            data: Stat.Intern,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, Stat)) callconv(.c) void,
+        ) Op(Io, Stat) {
+            return .{
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(Stat).init(.{
+                    .user_data = user_data,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
+                }),
+            };
+        }
+    }.func;
+}
+
 pub const QueueError = error{SubmissionQueueFull};
 
 pub const SubmitError = error{
@@ -396,71 +497,3 @@ pub const GetCwdError = error{
     NameTooLong,
     Unexpected,
 };
-
-pub fn pwrite(Io: type) *const fn (
-    file: std.fs.File,
-    buf: []const u8,
-    offset: u64,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Io.Op) void,
-) Io.Op {
-    return struct {
-        fn func(
-            file: std.fs.File,
-            buf: []const u8,
-            offset: u64,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Io.Op) void,
-        ) Io.Op {
-            return .{
-                .data = .{ .pwrite = .{
-                    .file = file,
-                    .buffer = buf,
-                    .offset = offset,
-                } },
-                .user_data = user_data,
-                .callback = callback,
-            };
-        }
-    }.func;
-}
-
-pub fn fsync(Io: type) *const fn (
-    file: std.fs.File,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Io.Op) void,
-) Io.Op {
-    return struct {
-        fn func(
-            file: std.fs.File,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Io.Op) void,
-        ) Io.Op {
-            return .{
-                .data = .{ .fsync = .{ .file = file } },
-                .user_data = user_data,
-                .callback = callback,
-            };
-        }
-    }.func;
-}
-
-pub fn stat(Io: type) *const fn (
-    file: std.fs.File,
-    user_data: ?*anyopaque,
-    callback: *const fn (*Io.Op) void,
-) Io.Op {
-    return struct {
-        fn func(
-            file: std.fs.File,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Io.Op) void,
-        ) Io.Op {
-            return .{
-                .data = .{ .stat = .{ .file = file } },
-                .user_data = user_data,
-                .callback = callback,
-            };
-        }
-    }.func;
-}

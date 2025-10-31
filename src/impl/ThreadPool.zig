@@ -183,27 +183,25 @@ pub fn OpPrivateData(T: type) type {
                     const op = self.toOp();
                     const d = &op.data;
                     const f: std.fs.File = .{ .handle = d.file };
-                    const read = f.pread(
+                    d.read = f.pread(
                         d.buffer[0..d.buffer_len],
                         d.offset,
                     ) catch |err| {
                         d.err_code = @intFromError(err);
                         return;
                     };
-                    d.read = read;
                 },
                 .pwrite => {
                     const op = self.toOp();
                     const d = &op.data;
                     const f: std.fs.File = .{ .handle = d.file };
-                    const write = f.pwrite(
+                    d.write = f.pwrite(
                         d.buffer[0..d.buffer_len],
                         d.offset,
                     ) catch |err| {
                         d.err_code = @intFromError(err);
                         return;
                     };
-                    d.write = write;
                 },
                 .fsync => {
                     const op = self.toOp();
@@ -211,6 +209,15 @@ pub fn OpPrivateData(T: type) type {
                     f.sync() catch |err| {
                         op.data.err_code = @intFromError(err);
                     };
+                },
+                .stat => {
+                    const op = self.toOp();
+                    const f: std.fs.File = .{ .handle = op.data.file };
+                    const std_stat = f.stat() catch |err| {
+                        op.data.err_code = @intFromError(err);
+                        return;
+                    };
+                    op.data.stat = .fromStdFsFileStat(std_stat);
                 },
             }
         }
@@ -228,3 +235,4 @@ pub const close = io.close(Io);
 pub const pRead = io.pRead(Io);
 pub const pWrite = io.pWrite(Io);
 pub const fSync = io.fSync(Io);
+pub const stat = io.stat(Io);

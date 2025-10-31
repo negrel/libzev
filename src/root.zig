@@ -10,6 +10,7 @@ pub const Close = iopkg.Close;
 pub const PRead = iopkg.PRead;
 pub const PWrite = iopkg.PWrite;
 pub const FSync = iopkg.FSync;
+pub const Stat = iopkg.Stat;
 
 fn forEachAvailableImpl(tcase: anytype) !void {
     inline for (impl.Impl.available()) |i| {
@@ -254,83 +255,55 @@ test "openat/pwrite/fsync/close" {
     }.tcase);
 }
 
-// test "openat/stat/close" {
-//     try forEachAvailableImpl(struct {
-//         fn tcase(Io: type) !void {
-//             const Static = struct {
-//                 var openAtCalled: bool = undefined;
-//                 var statCalled: bool = undefined;
-//                 var closeCalled: bool = undefined;
-//                 var file: anyerror!std.fs.File = undefined;
-//                 var stat: std.fs.File.StatError!std.fs.File.Stat = undefined;
-//
-//                 fn openAtCallback(iop: *Io.Op) void {
-//                     openAtCalled = true;
-//                     file = iop.data.openat.file;
-//                 }
-//
-//                 fn statCallback(iop: *Io.Op) void {
-//                     statCalled = true;
-//                     stat = iop.data.stat.stat;
-//                 }
-//
-//                 fn closeCallback(iop: *Io.Op) void {
-//                     closeCalled = true;
-//                     _ = iop.data.close;
-//                 }
-//             };
-//             Static.openAtCalled = false;
-//             Static.statCalled = false;
-//             Static.closeCalled = false;
-//             Static.file = undefined;
-//             Static.stat = undefined;
-//
-//             var io: Io = .{};
-//             try io.init(.{});
-//             defer io.deinit();
-//
-//             // Open.
-//             {
-//                 var openat = Io.openat(
-//                     std.fs.cwd(),
-//                     "./src/testdata/file.txt",
-//                     .{ .read = true },
-//                     null,
-//                     Static.openAtCallback,
-//                 );
-//
-//                 try io.submit(&openat);
-//
-//                 _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
-//
-//                 try std.testing.expect(Static.openAtCalled);
-//             }
-//
-//             const f = try Static.file;
-//
-//             // Stat.
-//             {
-//                 var stat = Io.stat(f, null, Static.statCallback);
-//
-//                 try io.submit(&stat);
-//
-//                 _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
-//
-//                 const s = try Static.stat;
-//
-//                 try std.testing.expect(s.inode != 0);
-//                 try std.testing.expect(s.atime > 0);
-//                 try std.testing.expect(s.mtime > 0);
-//                 try std.testing.expect(s.ctime > 0);
-//                 try std.testing.expect(s.size == 22);
-//                 //try std.testing.expect(s.mode == 0);
-//             }
-//
-//             // Close.
-//             try testutils.close(Io, &io, f);
-//         }
-//     }.tcase);
-// }
+test "openat/stat/close" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var statCalled: bool = undefined;
+                var stat: std.fs.File.StatError!iopkg.FileStat = undefined;
+
+                fn statCallback(iop: *Io.Op(Stat)) callconv(.c) void {
+                    statCalled = true;
+                    stat = iop.data.result();
+                }
+            };
+            Static.statCalled = false;
+            Static.stat = undefined;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            // Open.
+            const f = try testutils.openAt(&io, .{
+                .dir = std.fs.cwd(),
+                .path = "./src/testdata/file.txt",
+                .opts = .{ .read = true },
+            });
+
+            // Stat.
+            {
+                var stat = Io.stat(.{ .file = f }, null, Static.statCallback);
+
+                try testutils.queue(&io, &stat, 1);
+                try testutils.submit(&io, 1);
+                _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
+
+                const s = try Static.stat;
+
+                try std.testing.expect(s.inode != 0);
+                try std.testing.expect(s.atime > 0);
+                try std.testing.expect(s.mtime > 0);
+                try std.testing.expect(s.ctime > 0);
+                try std.testing.expect(s.size == 22);
+                //try std.testing.expect(s.mode == 0);
+            }
+
+            // Close.
+            try testutils.close(&io, .{ .file = f });
+        }
+    }.tcase);
+}
 //
 // test "getcwd" {
 //     try forEachAvailableImpl(struct {
