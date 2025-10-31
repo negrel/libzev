@@ -11,6 +11,7 @@ pub const PRead = iopkg.PRead;
 pub const PWrite = iopkg.PWrite;
 pub const FSync = iopkg.FSync;
 pub const Stat = iopkg.Stat;
+pub const GetCwd = iopkg.GetCwd;
 
 fn forEachAvailableImpl(tcase: anytype) !void {
     inline for (impl.Impl.available()) |i| {
@@ -304,46 +305,48 @@ test "openat/stat/close" {
         }
     }.tcase);
 }
-//
-// test "getcwd" {
-//     try forEachAvailableImpl(struct {
-//         fn tcase(Io: type) !void {
-//             const Static = struct {
-//                 var callbackCalled: bool = undefined;
-//                 var cwd: iopkg.GetCwdError![]u8 = undefined;
-//
-//                 fn getCwdCallback(iop: *Io.Op) void {
-//                     callbackCalled = true;
-//                     cwd = iop.data.getcwd.cwd;
-//                 }
-//             };
-//             Static.callbackCalled = false;
-//             Static.cwd = &.{};
-//
-//             var allocator = std.heap.smp_allocator;
-//             var io: Io = .{};
-//             try io.init(.{});
-//             defer io.deinit();
-//
-//             var buffer: [4096]u8 = undefined;
-//             var op = Io.getcwd(buffer[0..], null, Static.getCwdCallback);
-//
-//             try io.submit(&op);
-//
-//             _ = try testutils.pollAtLeast(Io, &io, 1, std.time.ns_per_s);
-//
-//             try std.testing.expect(Static.callbackCalled);
-//
-//             const expected = try std.process.getCwdAlloc(allocator);
-//             defer allocator.free(expected);
-//
-//             const actual = try Static.cwd;
-//
-//             try std.testing.expectEqualStrings(expected, actual);
-//         }
-//     }.tcase);
-// }
-//
+
+test "getcwd" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var callbackCalled: bool = undefined;
+                var cwd: GetCwd.Error![]u8 = undefined;
+
+                fn getCwdCallback(iop: *Io.Op(GetCwd)) callconv(.c) void {
+                    callbackCalled = true;
+                    cwd = iop.data.result();
+                }
+            };
+            Static.callbackCalled = false;
+            Static.cwd = undefined;
+
+            var allocator = std.heap.smp_allocator;
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            var buffer: [4096]u8 = undefined;
+            var getcwd = Io.getCwd(.{
+                .buffer = buffer[0..],
+            }, null, Static.getCwdCallback);
+
+            try testutils.queue(&io, &getcwd, 1);
+            try testutils.submit(&io, 1);
+            _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
+
+            try std.testing.expect(Static.callbackCalled);
+
+            const expected = try std.process.getCwdAlloc(allocator);
+            defer allocator.free(expected);
+
+            const actual = try Static.cwd;
+
+            try std.testing.expectEqualStrings(expected, actual);
+        }
+    }.tcase);
+}
+
 // test "chdir" {
 //     try forEachAvailableImpl(struct {
 //         fn tcase(Io: type) !void {

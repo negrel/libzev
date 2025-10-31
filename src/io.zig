@@ -12,6 +12,7 @@ pub const OpCode = enum(c_int) {
     pwrite,
     fsync,
     stat,
+    getcwd,
 };
 
 /// OpHeader defines field at the beginning of Op(Io, T) that don't depend on
@@ -276,6 +277,38 @@ pub const FileStat = extern struct {
     }
 };
 
+pub const GetCwd = extern struct {
+    pub const op_code = OpCode.getcwd;
+
+    pub const Intern = struct {
+        buffer: []u8,
+
+        pub fn toExtern(self: Intern) GetCwd {
+            return .{
+                .buffer = self.buffer.ptr,
+                .buffer_len = self.buffer.len,
+            };
+        }
+    };
+
+    pub const Error = error{
+        CurrentWorkingDirectoryUnlinked,
+        NameTooLong,
+        Unexpected,
+    };
+
+    buffer: [*c]u8,
+    buffer_len: usize,
+
+    cwd_len: usize = undefined,
+    err_code: u16 = 0,
+
+    pub fn result(self: GetCwd) Error![]u8 {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+        return self.buffer[0..self.cwd_len];
+    }
+};
+
 pub fn OpConstructor(Io: type, T: type) type {
     if (@hasDecl(T, "Intern")) {
         return *const fn (
@@ -460,6 +493,27 @@ pub fn stat(Io: type) OpConstructor(Io, Stat) {
     }.func;
 }
 
+pub fn getCwd(Io: type) OpConstructor(Io, GetCwd) {
+    return struct {
+        pub fn func(
+            data: GetCwd.Intern,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, GetCwd)) callconv(.c) void,
+        ) Op(Io, GetCwd) {
+            return .{
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(GetCwd).init(.{
+                    .user_data = user_data,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
+                }),
+            };
+        }
+    }.func;
+}
+
 pub const QueueError = error{SubmissionQueueFull};
 
 pub const SubmitError = error{
@@ -490,10 +544,4 @@ pub const PollMode = enum(c_int) {
     one = 1,
     /// Poll events I/O operation if any without blocking.
     nowait = 2,
-};
-
-pub const GetCwdError = error{
-    CurrentWorkingDirectoryUnlinked,
-    NameTooLong,
-    Unexpected,
 };

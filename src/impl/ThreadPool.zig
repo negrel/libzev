@@ -219,6 +219,16 @@ pub fn OpPrivateData(T: type) type {
                     };
                     op.data.stat = .fromStdFsFileStat(std_stat);
                 },
+                .getcwd => {
+                    const op = self.toOp();
+                    const cwd = std.process.getCwd(
+                        op.data.buffer[0..op.data.buffer_len],
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
+                        return;
+                    };
+                    op.data.cwd_len = cwd.len;
+                },
             }
         }
 
@@ -236,3 +246,4 @@ pub const pRead = io.pRead(Io);
 pub const pWrite = io.pWrite(Io);
 pub const fSync = io.fSync(Io);
 pub const stat = io.stat(Io);
+pub const getCwd = io.getCwd(Io);

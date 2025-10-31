@@ -34,9 +34,23 @@ pub fn deinit(self: *Io) void {
 }
 
 pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
-    try self.queueOpHeader(&op.header);
-    self.sqe_len += 1;
-    return self.sqe_len;
+    std.debug.assert(@typeInfo(@TypeOf(op)) == .pointer);
+
+    if (self.tpool.batch.len + self.sqe_len + 1 == std.math.maxInt(u32)) {
+        return io.QueueError.SubmissionQueueFull;
+    }
+
+    switch (op.header.code) {
+        .getcwd => {
+            _ = try self.tpool.queue(op);
+        },
+        else => {
+            try self.queueOpHeader(&op.header);
+            self.sqe_len += 1;
+        },
+    }
+
+    return self.sqe_len + @as(u32, @intCast(self.tpool.batch.len));
 }
 
 fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
@@ -108,6 +122,7 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
                 &stat_op.private.uring_data,
             );
         },
+        .getcwd => unreachable,
     }
     sqe.user_data = @intFromPtr(op_h);
 }
@@ -135,7 +150,7 @@ pub fn submit(self: *Io) io.SubmitError!u32 {
 
         self.sqe_len -= submitted;
         self.active += submitted;
-        return submitted;
+        return submitted + try self.tpool.submit();
     }
 }
 
@@ -295,6 +310,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                         op.data.stat = .fromStdFsFileStat(std_stat);
                     }
                 },
+                .getcwd => unreachable,
             }
 
             const op = Op(io.NoOp).fromHeaderUnsafe(op_h);
@@ -372,6 +388,8 @@ pub fn OpPrivateData(T: type) type {
         break :T linux.kernel_timespec;
     } else if (T.op_code == io.OpCode.stat) T: {
         break :T linux.Statx;
+    } else if (T.op_code == io.OpCode.getcwd) {
+        return ThreadPool.OpPrivateData(T);
     } else void;
 
     return extern struct {
@@ -399,3 +417,4 @@ pub const pRead = io.pRead(Io);
 pub const pWrite = io.pWrite(Io);
 pub const fSync = io.fSync(Io);
 pub const stat = io.stat(Io);
+pub const getCwd = io.getCwd(Io);
