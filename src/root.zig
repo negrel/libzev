@@ -13,12 +13,13 @@ pub const FSync = iopkg.FSync;
 pub const Stat = iopkg.Stat;
 pub const GetCwd = iopkg.GetCwd;
 pub const ChDir = iopkg.ChDir;
+pub const UnlinkAt = iopkg.UnlinkAt;
 
 fn forEachAvailableImpl(tcase: anytype) !void {
     inline for (impl.Impl.available()) |i| {
         const Impl = i.Impl();
         @call(.auto, tcase, .{Impl}) catch |err| {
-            std.debug.print("\nIo={s}\n\n", .{@typeName(Impl)});
+            std.debug.print("\nIo={s} error={s}\n\n", .{ @typeName(Impl), @errorName(err) });
             return err;
         };
     }
@@ -169,14 +170,16 @@ test "openat/pread/close" {
     }.tcase);
 }
 
-test "openat/pwrite/fsync/close" {
+test "openat/pwrite/fsync/close/unlinkat" {
     try forEachAvailableImpl(struct {
         fn tcase(Io: type) !void {
             const Static = struct {
                 var pwriteCalled: bool = undefined;
                 var fsyncCalled: bool = undefined;
+                var unlinkAtCalled: bool = undefined;
                 var write: std.fs.File.PWriteError!usize = undefined;
-                var fsyncResult: std.fs.File.SyncError!void = undefined;
+                var fsync: std.fs.File.SyncError!void = undefined;
+                var unlinkAt: UnlinkAt.Error!void = undefined;
 
                 fn pwriteCallback(iop: *Io.Op(PWrite)) callconv(.c) void {
                     pwriteCalled = true;
@@ -185,12 +188,20 @@ test "openat/pwrite/fsync/close" {
 
                 fn fsyncCallback(iop: *Io.Op(FSync)) callconv(.c) void {
                     fsyncCalled = true;
-                    fsyncResult = iop.data.result();
+                    fsync = iop.data.result();
+                }
+
+                fn unlinkAtCallback(iop: *Io.Op(UnlinkAt)) callconv(.c) void {
+                    unlinkAtCalled = true;
+                    unlinkAt = iop.data.result();
                 }
             };
             Static.pwriteCalled = false;
+            Static.fsyncCalled = false;
+            Static.unlinkAtCalled = false;
             Static.write = undefined;
-            Static.fsyncResult = undefined;
+            Static.fsync = undefined;
+            Static.unlinkAt = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -202,7 +213,7 @@ test "openat/pwrite/fsync/close" {
                 &io,
                 .{
                     .dir = tmpDir.dir,
-                    .path = "./file.txt",
+                    .path = "file.txt",
                     .opts = .{
                         .read = true,
                         .write = true,
@@ -248,11 +259,28 @@ test "openat/pwrite/fsync/close" {
 
                 try std.testing.expect(Static.fsyncCalled);
 
-                try Static.fsyncResult;
+                try Static.fsync;
             }
 
             // Close.
             try testutils.close(&io, .{ .file = f });
+
+            // Unlink.
+            {
+                var unlinkAt = Io.unlinkAt(.{
+                    .dir = tmpDir.dir,
+                    .path = "file.txt",
+                    .remove_dir = false,
+                }, null, Static.unlinkAtCallback);
+
+                try testutils.queue(&io, &unlinkAt, 1);
+                try testutils.submit(&io, 1);
+                _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
+
+                try std.testing.expect(Static.unlinkAtCalled);
+
+                try Static.unlinkAt;
+            }
         }
     }.tcase);
 }

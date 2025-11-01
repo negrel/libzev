@@ -90,7 +90,7 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
                 }
             }
             sqe.prep_openat(
-                linux.AT.FDCWD,
+                d.dir,
                 d.path,
                 os_flags,
                 d.permissions,
@@ -126,6 +126,14 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
             );
         },
         .getcwd, .chdir => unreachable,
+        .unlinkat => {
+            const unlinkat_op = Op(io.UnlinkAt).fromHeaderUnsafe(op_h);
+            sqe.prep_unlinkat(
+                unlinkat_op.data.dir,
+                unlinkat_op.data.path,
+                if (unlinkat_op.data.remove_dir) posix.AT.REMOVEDIR else 0,
+            );
+        },
     }
     sqe.user_data = @intFromPtr(op_h);
 }
@@ -181,7 +189,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                 .openat => {
                     const op = Op(io.OpenAt).fromHeaderUnsafe(op_h);
                     if (cqe.res < 0) {
-                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
                             .INTR => unreachable,
                             .FAULT => unreachable,
@@ -222,7 +230,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                 .pread => {
                     const op = Op(io.PRead).fromHeaderUnsafe(op_h);
                     if (cqe.res < 0) {
-                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
                             .INTR => unreachable,
                             .INVAL => unreachable,
@@ -248,7 +256,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                 .pwrite => {
                     const op = Op(io.PWrite).fromHeaderUnsafe(op_h);
                     if (cqe.res < 0) {
-                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
                             .INTR => unreachable,
                             .INVAL => error.InvalidArgument,
@@ -280,7 +288,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                 .fsync => {
                     const op = Op(io.PWrite).fromHeaderUnsafe(op_h);
                     if (cqe.res < 0) {
-                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
                             .BADF, .INVAL, .ROFS => unreachable,
                             .IO => error.InputOutput,
@@ -293,7 +301,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                 .stat => {
                     const op = Op(io.Stat).fromHeaderUnsafe(op_h);
                     if (cqe.res < 0) {
-                        const rc = @as(posix.E, @enumFromInt(-cqe.res));
+                        const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
                             .ACCES => unreachable,
                             .BADF => unreachable,
@@ -314,6 +322,41 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                     }
                 },
                 .getcwd, .chdir => unreachable,
+                .unlinkat => {
+                    const op = Op(io.UnlinkAt).fromHeaderUnsafe(op_h);
+                    if (cqe.res < 0) {
+                        const rc = errno(cqe.res);
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .ACCES => error.AccessDenied,
+                            .PERM => error.PermissionDenied,
+                            .BUSY => error.FileBusy,
+                            .FAULT => unreachable,
+                            .IO => error.FileSystem,
+                            .ISDIR => error.IsDir,
+                            .LOOP => error.SymLinkLoop,
+                            .NAMETOOLONG => error.NameTooLong,
+                            .NOENT => error.FileNotFound,
+                            .NOTDIR => error.NotDir,
+                            .NOMEM => error.SystemResources,
+                            .ROFS => error.ReadOnlyFileSystem,
+                            .EXIST => if (op.data.remove_dir)
+                                error.DirNotEmpty
+                            else
+                                unreachable,
+                            .NOTEMPTY => error.DirNotEmpty,
+                            .ILSEQ => |err| if (builtin.os.tag == .wasi)
+                                error.InvalidUtf8
+                            else
+                                posix.unexpectedErrno(err),
+                            // invalid flags, or pathname has '.' as last
+                            // component
+                            .INVAL => unreachable,
+                            // always a race condition
+                            .BADF => unreachable,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    }
+                },
             }
 
             const op = Op(io.NoOp).fromHeaderUnsafe(op_h);
@@ -353,6 +396,10 @@ comptime {
     {
         @compileError("OpPrivateData(T).callback offset depends on T");
     }
+}
+
+fn errno(err_code: i32) linux.E {
+    return posix.errno(@as(isize, @intCast(err_code)));
 }
 
 fn msToTimespec(ms: u64) linux.kernel_timespec {
@@ -424,3 +471,4 @@ pub const fSync = io.fSync(Io);
 pub const stat = io.stat(Io);
 pub const getCwd = io.getCwd(Io);
 pub const chDir = io.chDir(Io);
+pub const unlinkAt = io.unlinkAt(Io);

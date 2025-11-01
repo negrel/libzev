@@ -2,6 +2,7 @@
 //! I/O.
 
 const std = @import("std");
+const fs = std.fs;
 
 pub const OpCode = enum(c_int) {
     noop,
@@ -14,6 +15,7 @@ pub const OpCode = enum(c_int) {
     stat,
     getcwd,
     chdir,
+    unlinkat,
 };
 
 /// OpHeader defines field at the beginning of Op(Io, T) that don't depend on
@@ -62,7 +64,7 @@ pub const OpenAt = extern struct {
     pub const op_code = OpCode.openat;
 
     pub const Intern = struct {
-        dir: std.fs.Dir,
+        dir: fs.Dir,
         path: [:0]const u8,
         opts: Options,
         permissions: u32 = 0o0666,
@@ -86,15 +88,15 @@ pub const OpenAt = extern struct {
         create: bool = true,
     };
 
-    dir: std.fs.File.Handle,
+    dir: fs.File.Handle,
     path: [*c]const u8,
     opts: Options,
     permissions: u32 = 0o0666,
 
-    file: std.fs.File.Handle = -1,
+    file: fs.File.Handle = -1,
     err_code: u16 = 0,
 
-    pub fn result(self: *OpenAt) std.fs.File.OpenError!std.fs.File {
+    pub fn result(self: *OpenAt) fs.File.OpenError!fs.File {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
         return .{ .handle = self.file };
     }
@@ -104,21 +106,21 @@ pub const Close = extern struct {
     pub const op_code = OpCode.close;
 
     pub const Intern = struct {
-        file: std.fs.File,
+        file: fs.File,
 
         fn toExtern(self: Intern) Close {
             return .{ .file = self.file.handle };
         }
     };
 
-    file: std.fs.File.Handle,
+    file: fs.File.Handle,
 };
 
 pub const PRead = extern struct {
     pub const op_code = OpCode.pread;
 
     pub const Intern = struct {
-        file: std.fs.File,
+        file: fs.File,
         buffer: []u8,
         offset: u64,
 
@@ -132,7 +134,7 @@ pub const PRead = extern struct {
         }
     };
 
-    file: std.fs.File.Handle,
+    file: fs.File.Handle,
     buffer: [*c]u8,
     buffer_len: usize,
     offset: u64,
@@ -140,7 +142,7 @@ pub const PRead = extern struct {
     read: usize = 0,
     err_code: u16 = 0,
 
-    pub fn result(self: *PRead) std.fs.File.PReadError!usize {
+    pub fn result(self: *PRead) fs.File.PReadError!usize {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
         return self.read;
     }
@@ -150,7 +152,7 @@ pub const PWrite = extern struct {
     pub const op_code = OpCode.pwrite;
 
     pub const Intern = struct {
-        file: std.fs.File,
+        file: fs.File,
         buffer: []const u8,
         offset: u64,
 
@@ -164,7 +166,7 @@ pub const PWrite = extern struct {
         }
     };
 
-    file: std.fs.File.Handle,
+    file: fs.File.Handle,
     buffer: [*c]const u8,
     buffer_len: usize,
     offset: u64,
@@ -172,7 +174,7 @@ pub const PWrite = extern struct {
     write: usize = 0,
     err_code: u16 = 0,
 
-    pub fn result(self: *PWrite) std.fs.File.PWriteError!usize {
+    pub fn result(self: *PWrite) fs.File.PWriteError!usize {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
         return self.write;
     }
@@ -182,18 +184,18 @@ pub const FSync = extern struct {
     pub const op_code = OpCode.fsync;
 
     pub const Intern = struct {
-        file: std.fs.File,
+        file: fs.File,
 
         pub fn toExtern(self: Intern) FSync {
             return .{ .file = self.file.handle };
         }
     };
 
-    file: std.fs.File.Handle,
+    file: fs.File.Handle,
 
     err_code: u16 = 0,
 
-    pub fn result(self: *FSync) std.fs.File.SyncError!void {
+    pub fn result(self: *FSync) fs.File.SyncError!void {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
     }
 };
@@ -202,19 +204,19 @@ pub const Stat = extern struct {
     pub const op_code = OpCode.stat;
 
     pub const Intern = struct {
-        file: std.fs.File,
+        file: fs.File,
 
         pub fn toExtern(self: Intern) Stat {
             return .{ .file = self.file.handle };
         }
     };
 
-    file: std.fs.File.Handle,
+    file: fs.File.Handle,
 
     err_code: u16 = 0,
     stat: FileStat = undefined,
 
-    pub fn result(self: *Stat) std.fs.File.StatError!FileStat {
+    pub fn result(self: *Stat) fs.File.StatError!FileStat {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
         return self.stat;
     }
@@ -222,21 +224,21 @@ pub const Stat = extern struct {
 
 pub const FileStat = extern struct {
     const FileKind = enum(c_int) {
-        block_device = @intFromEnum(std.fs.File.Kind.block_device),
-        character_device = @intFromEnum(std.fs.File.Kind.character_device),
-        directory = @intFromEnum(std.fs.File.Kind.directory),
-        named_pipe = @intFromEnum(std.fs.File.Kind.named_pipe),
-        sym_link = @intFromEnum(std.fs.File.Kind.sym_link),
-        file = @intFromEnum(std.fs.File.Kind.file),
-        unix_domain_socket = @intFromEnum(std.fs.File.Kind.unix_domain_socket),
-        whiteout = @intFromEnum(std.fs.File.Kind.whiteout),
-        door = @intFromEnum(std.fs.File.Kind.door),
-        event_port = @intFromEnum(std.fs.File.Kind.event_port),
-        unknown = @intFromEnum(std.fs.File.Kind.unknown),
+        block_device = @intFromEnum(fs.File.Kind.block_device),
+        character_device = @intFromEnum(fs.File.Kind.character_device),
+        directory = @intFromEnum(fs.File.Kind.directory),
+        named_pipe = @intFromEnum(fs.File.Kind.named_pipe),
+        sym_link = @intFromEnum(fs.File.Kind.sym_link),
+        file = @intFromEnum(fs.File.Kind.file),
+        unix_domain_socket = @intFromEnum(fs.File.Kind.unix_domain_socket),
+        whiteout = @intFromEnum(fs.File.Kind.whiteout),
+        door = @intFromEnum(fs.File.Kind.door),
+        event_port = @intFromEnum(fs.File.Kind.event_port),
+        unknown = @intFromEnum(fs.File.Kind.unknown),
 
         comptime {
             std.debug.assert(@typeInfo(@This()).@"enum".fields.len ==
-                @typeInfo(std.fs.File.Kind).@"enum".fields.len);
+                @typeInfo(fs.File.Kind).@"enum".fields.len);
         }
     };
 
@@ -251,10 +253,10 @@ pub const FileStat = extern struct {
     ///
     /// The FileIndex on Windows is similar. It is a number for a file that
     /// is unique to each filesystem.
-    inode: std.fs.File.INode,
+    inode: fs.File.INode,
     size: u64,
     /// This is available on POSIX systems and is always 0 otherwise.
-    mode: std.fs.File.Mode,
+    mode: fs.File.Mode,
     kind: FileKind,
 
     /// Last access time in nanoseconds, relative to UTC 1970-01-01.
@@ -264,7 +266,7 @@ pub const FileStat = extern struct {
     /// Last status/metadata change time in nanoseconds, relative to UTC 1970-01-01.
     ctime: i128,
 
-    pub fn fromStdFsFileStat(s: std.fs.File.Stat) FileStat {
+    pub fn fromStdFsFileStat(s: fs.File.Stat) FileStat {
         return .{
             .inode = s.inode,
             .size = s.size,
@@ -324,6 +326,36 @@ pub const ChDir = extern struct {
     err_code: u16 = 0,
 
     pub fn result(self: ChDir) std.posix.ChangeCurDirError!void {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+    }
+};
+
+pub const UnlinkAt = extern struct {
+    pub const op_code = OpCode.unlinkat;
+
+    pub const Error = (fs.Dir.DeleteFileError || fs.Dir.DeleteDirError);
+
+    pub const Intern = struct {
+        dir: fs.Dir,
+        path: [:0]const u8,
+        remove_dir: bool,
+
+        pub fn toExtern(self: Intern) UnlinkAt {
+            return .{
+                .dir = self.dir.fd,
+                .path = self.path.ptr,
+                .remove_dir = self.remove_dir,
+            };
+        }
+    };
+
+    dir: fs.Dir.Handle,
+    path: [*c]const u8,
+    remove_dir: bool,
+
+    err_code: u16 = 0,
+
+    pub fn result(self: *UnlinkAt) Error!void {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
     }
 };
@@ -543,6 +575,27 @@ pub fn chDir(Io: type) OpConstructor(Io, ChDir) {
             return .{
                 .data = data.toExtern(),
                 .private = Io.OpPrivateData(ChDir).init(.{
+                    .user_data = user_data,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
+                }),
+            };
+        }
+    }.func;
+}
+
+pub fn unlinkAt(Io: type) OpConstructor(Io, UnlinkAt) {
+    return struct {
+        pub fn func(
+            data: UnlinkAt.Intern,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, UnlinkAt)) callconv(.c) void,
+        ) Op(Io, UnlinkAt) {
+            return .{
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(UnlinkAt).init(.{
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,

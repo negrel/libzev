@@ -234,6 +234,19 @@ pub fn OpPrivateData(T: type) type {
                         return;
                     };
                 },
+                .unlinkat => {
+                    const op = self.toOp();
+                    const dir: std.fs.Dir = .{ .fd = op.data.dir };
+                    if (op.data.remove_dir) {
+                        dir.deleteDirZ(op.data.path) catch |err| {
+                            op.data.err_code = @intFromError(err);
+                        };
+                    } else {
+                        dir.deleteFileZ(op.data.path) catch |err| {
+                            op.data.err_code = @intFromError(err);
+                        };
+                    }
+                },
             }
         }
 
@@ -253,3 +266,4 @@ pub const fSync = io.fSync(Io);
 pub const stat = io.stat(Io);
 pub const getCwd = io.getCwd(Io);
 pub const chDir = io.chDir(Io);
+pub const unlinkAt = io.unlinkAt(Io);
