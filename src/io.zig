@@ -81,6 +81,8 @@ pub const TimeOut = extern struct {
 pub const OpenAt = extern struct {
     pub const op_code = OpCode.openat;
 
+    pub const Error = fs.File.OpenError;
+
     pub const Intern = struct {
         dir: fs.Dir,
         path: [:0]const u8,
@@ -114,7 +116,7 @@ pub const OpenAt = extern struct {
     file: fs.File.Handle = -1,
     err_code: u16 = 0,
 
-    pub fn result(self: *OpenAt) fs.File.OpenError!fs.File {
+    pub fn result(self: *OpenAt) Error!fs.File {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
         return .{ .handle = self.file };
     }
@@ -136,6 +138,8 @@ pub const Close = extern struct {
 
 pub const PRead = extern struct {
     pub const op_code = OpCode.pread;
+
+    pub const Error = fs.File.PReadError;
 
     pub const Intern = struct {
         file: fs.File,
@@ -160,7 +164,7 @@ pub const PRead = extern struct {
     read: usize = 0,
     err_code: u16 = 0,
 
-    pub fn result(self: *PRead) fs.File.PReadError!usize {
+    pub fn result(self: *PRead) Error!usize {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
         return self.read;
     }
@@ -168,6 +172,8 @@ pub const PRead = extern struct {
 
 pub const PWrite = extern struct {
     pub const op_code = OpCode.pwrite;
+
+    pub const Error = fs.File.PWriteError;
 
     pub const Intern = struct {
         file: fs.File,
@@ -192,7 +198,7 @@ pub const PWrite = extern struct {
     write: usize = 0,
     err_code: u16 = 0,
 
-    pub fn result(self: *PWrite) fs.File.PWriteError!usize {
+    pub fn result(self: *PWrite) Error!usize {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
         return self.write;
     }
@@ -200,6 +206,8 @@ pub const PWrite = extern struct {
 
 pub const FSync = extern struct {
     pub const op_code = OpCode.fsync;
+
+    pub const Error = fs.File.SyncError;
 
     pub const Intern = struct {
         file: fs.File,
@@ -213,13 +221,15 @@ pub const FSync = extern struct {
 
     err_code: u16 = 0,
 
-    pub fn result(self: *FSync) fs.File.SyncError!void {
+    pub fn result(self: *FSync) Error!void {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
     }
 };
 
 pub const Stat = extern struct {
     pub const op_code = OpCode.stat;
+
+    pub const Error = fs.File.StatError;
 
     pub const Intern = struct {
         file: fs.File,
@@ -234,7 +244,7 @@ pub const Stat = extern struct {
     err_code: u16 = 0,
     stat: FileStat = undefined,
 
-    pub fn result(self: *Stat) fs.File.StatError!FileStat {
+    pub fn result(self: *Stat) Error!FileStat {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
         return self.stat;
     }
@@ -300,6 +310,12 @@ pub const FileStat = extern struct {
 pub const GetCwd = extern struct {
     pub const op_code = OpCode.getcwd;
 
+    pub const Error = error{
+        CurrentWorkingDirectoryUnlinked,
+        NameTooLong,
+        Unexpected,
+    };
+
     pub const Intern = struct {
         buffer: []u8,
 
@@ -309,12 +325,6 @@ pub const GetCwd = extern struct {
                 .buffer_len = self.buffer.len,
             };
         }
-    };
-
-    pub const Error = error{
-        CurrentWorkingDirectoryUnlinked,
-        NameTooLong,
-        Unexpected,
     };
 
     buffer: [*c]u8,
@@ -332,6 +342,8 @@ pub const GetCwd = extern struct {
 pub const ChDir = extern struct {
     pub const op_code = OpCode.chdir;
 
+    pub const Error = std.posix.ChangeCurDirError;
+
     pub const Intern = struct {
         path: [:0]const u8,
 
@@ -343,7 +355,7 @@ pub const ChDir = extern struct {
     path: [*c]const u8,
     err_code: u16 = 0,
 
-    pub fn result(self: ChDir) std.posix.ChangeCurDirError!void {
+    pub fn result(self: ChDir) Error!void {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
     }
 };
