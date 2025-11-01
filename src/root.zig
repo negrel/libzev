@@ -3,6 +3,9 @@ const std = @import("std");
 const impl = @import("./impl.zig");
 const iopkg = @import("./io.zig");
 
+pub const Impl = impl.Impl;
+pub const Io = Impl.default().Impl();
+
 pub const NoOp = iopkg.NoOp;
 pub const TimeOut = iopkg.TimeOut;
 pub const OpenAt = iopkg.OpenAt;
@@ -17,9 +20,9 @@ pub const UnlinkAt = iopkg.UnlinkAt;
 
 fn forEachAvailableImpl(tcase: anytype) !void {
     inline for (impl.Impl.available()) |i| {
-        const Impl = i.Impl();
-        @call(.auto, tcase, .{Impl}) catch |err| {
-            std.debug.print("\nIo={s} error={s}\n\n", .{ @typeName(Impl), @errorName(err) });
+        const Io = i.Impl();
+        @call(.auto, tcase, .{Io}) catch |err| {
+            std.debug.print("\nIo={s} error={s}\n\n", .{ @typeName(Io), @errorName(err) });
             return err;
         };
     }

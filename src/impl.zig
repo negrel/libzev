@@ -21,8 +21,16 @@ pub const Impl = enum {
         };
     }
 
-    /// Returns type associated to this implementation.
-    pub inline fn Impl(comptime self: Self) type {
+    pub fn default() Self {
+        const impls = available();
+        if (impls.len == 0) {
+            @compileError("no implementation available for this target");
+        }
+        return impls[0];
+    }
+
+    /// Returns Io type associated to this implementation.
+    pub inline fn Io(comptime self: Self) type {
         return switch (self) {
             .io_uring => IoUring,
             .thread_pool => ThreadPool,
