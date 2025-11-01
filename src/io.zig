@@ -16,6 +16,22 @@ pub const OpCode = enum(c_int) {
     getcwd,
     chdir,
     unlinkat,
+
+    pub fn Data(self: @This()) type {
+        return switch (self) {
+            .noop => NoOp,
+            .timeout => TimeOut,
+            .openat => OpenAt,
+            .close => Close,
+            .pread => PRead,
+            .pwrite => PWrite,
+            .fsync => FSync,
+            .stat => Stat,
+            .getcwd => GetCwd,
+            .chdir => ChDir,
+            .unlinkat => UnlinkAt,
+        };
+    }
 };
 
 /// OpHeader defines field at the beginning of Op(Io, T) that don't depend on

@@ -3,6 +3,8 @@ const std = @import("std");
 const impl = @import("./impl.zig");
 const io = @import("./io.zig");
 
+pub const OpCode = io.OpCode;
+
 pub const Impl = impl.Impl;
 pub const Io = Impl.default().Io();
 
