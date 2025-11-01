@@ -123,6 +123,12 @@ pub fn OpPrivateData(T: type) type {
         }
 
         fn toOp(self: *OpPrivateData(T)) *Op(T) {
+            const op: *Op(T) = @alignCast(@fieldParentPtr("private", self));
+            std.debug.assert(op.header.code == T.op_code);
+            return op;
+        }
+
+        fn toNoOp(self: *OpPrivateData(io.NoOp)) *Op(io.NoOp) {
             return @alignCast(@fieldParentPtr("private", self));
         }
 
@@ -219,11 +225,20 @@ pub fn OpPrivateData(T: type) type {
                     };
                     op.data.cwd_len = cwd.len;
                 },
+                .chdir => {
+                    const op = self.toOp();
+                    std.process.changeCurDirZ(
+                        op.data.path,
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
+                        return;
+                    };
+                },
             }
         }
 
         pub fn doCallback(self: *OpPrivateData(T)) void {
-            self.callback(&self.toOp().header);
+            self.callback(@ptrCast(self.toNoOp()));
         }
     };
 }
@@ -237,3 +252,4 @@ pub const pWrite = io.pWrite(Io);
 pub const fSync = io.fSync(Io);
 pub const stat = io.stat(Io);
 pub const getCwd = io.getCwd(Io);
+pub const chDir = io.chDir(Io);

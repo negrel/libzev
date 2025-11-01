@@ -44,6 +44,9 @@ pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
         .getcwd => {
             _ = try self.tpool.queue(op);
         },
+        .chdir => {
+            _ = try self.tpool.queue(op);
+        },
         else => {
             try self.queueOpHeader(&op.header);
             self.sqe_len += 1;
@@ -122,7 +125,7 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
                 &stat_op.private.uring_data,
             );
         },
-        .getcwd => unreachable,
+        .getcwd, .chdir => unreachable,
     }
     sqe.user_data = @intFromPtr(op_h);
 }
@@ -310,7 +313,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                         op.data.stat = .fromStdFsFileStat(std_stat);
                     }
                 },
-                .getcwd => unreachable,
+                .getcwd, .chdir => unreachable,
             }
 
             const op = Op(io.NoOp).fromHeaderUnsafe(op_h);
@@ -390,6 +393,8 @@ pub fn OpPrivateData(T: type) type {
         break :T linux.Statx;
     } else if (T.op_code == io.OpCode.getcwd) {
         return ThreadPool.OpPrivateData(T);
+    } else if (T.op_code == io.OpCode.chdir) {
+        return ThreadPool.OpPrivateData(T);
     } else void;
 
     return extern struct {
@@ -418,3 +423,4 @@ pub const pWrite = io.pWrite(Io);
 pub const fSync = io.fSync(Io);
 pub const stat = io.stat(Io);
 pub const getCwd = io.getCwd(Io);
+pub const chDir = io.chDir(Io);

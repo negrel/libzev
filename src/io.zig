@@ -13,6 +13,7 @@ pub const OpCode = enum(c_int) {
     fsync,
     stat,
     getcwd,
+    chdir,
 };
 
 /// OpHeader defines field at the beginning of Op(Io, T) that don't depend on
@@ -308,6 +309,25 @@ pub const GetCwd = extern struct {
     }
 };
 
+pub const ChDir = extern struct {
+    pub const op_code = OpCode.chdir;
+
+    pub const Intern = struct {
+        path: [:0]const u8,
+
+        pub fn toExtern(self: Intern) ChDir {
+            return .{ .path = self.path.ptr };
+        }
+    };
+
+    path: [*c]const u8,
+    err_code: u16 = 0,
+
+    pub fn result(self: ChDir) std.posix.ChangeCurDirError!void {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+    }
+};
+
 pub fn OpConstructor(Io: type, T: type) type {
     if (@hasDecl(T, "Intern")) {
         return *const fn (
@@ -502,6 +522,27 @@ pub fn getCwd(Io: type) OpConstructor(Io, GetCwd) {
             return .{
                 .data = data.toExtern(),
                 .private = Io.OpPrivateData(GetCwd).init(.{
+                    .user_data = user_data,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
+                }),
+            };
+        }
+    }.func;
+}
+
+pub fn chDir(Io: type) OpConstructor(Io, ChDir) {
+    return struct {
+        pub fn func(
+            data: ChDir.Intern,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, ChDir)) callconv(.c) void,
+        ) Op(Io, ChDir) {
+            return .{
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(ChDir).init(.{
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
