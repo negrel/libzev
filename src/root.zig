@@ -1,21 +1,23 @@
 const std = @import("std");
 
 const impl = @import("./impl.zig");
-const iopkg = @import("./io.zig");
+const io = @import("./io.zig");
 
 pub const Impl = impl.Impl;
 pub const Io = Impl.default().Io();
 
-pub const NoOp = iopkg.NoOp;
-pub const TimeOut = iopkg.TimeOut;
-pub const OpenAt = iopkg.OpenAt;
-pub const Close = iopkg.Close;
-pub const PRead = iopkg.PRead;
-pub const PWrite = iopkg.PWrite;
-pub const FSync = iopkg.FSync;
-pub const Stat = iopkg.Stat;
-pub const GetCwd = iopkg.GetCwd;
-pub const ChDir = iopkg.ChDir;
-pub const UnlinkAt = iopkg.UnlinkAt;
+pub const PollMode = io.PollMode;
 
-pub const FileStat = iopkg.FileStat;
+pub const NoOp = io.NoOp;
+pub const TimeOut = io.TimeOut;
+pub const OpenAt = io.OpenAt;
+pub const Close = io.Close;
+pub const PRead = io.PRead;
+pub const PWrite = io.PWrite;
+pub const FSync = io.FSync;
+pub const Stat = io.Stat;
+pub const GetCwd = io.GetCwd;
+pub const ChDir = io.ChDir;
+pub const UnlinkAt = io.UnlinkAt;
+
+pub const FileStat = io.FileStat;
