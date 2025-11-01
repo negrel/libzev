@@ -22,6 +22,9 @@ pub const OpCode = enum(c_int) {
 /// Io and T. It is always safe to read OpHeader even if Io and T are unknown.
 pub const OpHeader = extern struct {
     code: OpCode,
+
+    callback: *const fn (op_h: *OpHeader) callconv(.c) void,
+    user_data: ?*anyopaque,
 };
 
 /// Op defines an I/O operation structure. It is made of a static header and
@@ -34,9 +37,8 @@ pub const OpHeader = extern struct {
 pub fn Op(Io: type, T: type) type {
     return extern struct {
         const Impl = Io;
-        const op_code = T.op_code;
 
-        header: OpHeader = .{ .code = op_code },
+        header: OpHeader = undefined,
 
         // Implementation specific fields.
         private: Impl.OpPrivateData(T),
@@ -384,14 +386,16 @@ pub fn noOp(Io: type) OpConstructor(Io, NoOp) {
             callback: *const fn (*Op(Io, NoOp)) callconv(.c) void,
         ) Op(Io, NoOp) {
             return .{
-                .data = data,
-                .private = Io.OpPrivateData(NoOp).init(.{
+                .header = .{
+                    .code = .noop,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data,
+                .private = Io.OpPrivateData(NoOp).init(.{}),
             };
         }
     }.func;
@@ -405,14 +409,16 @@ pub fn timeOut(Io: type) OpConstructor(Io, TimeOut) {
             callback: *const fn (*Op(Io, TimeOut)) callconv(.c) void,
         ) Op(Io, TimeOut) {
             return .{
-                .data = data,
-                .private = Io.OpPrivateData(TimeOut).init(.{
+                .header = .{
+                    .code = .timeout,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data,
+                .private = Io.OpPrivateData(TimeOut).init(.{}),
             };
         }
     }.func;
@@ -426,14 +432,16 @@ pub fn openAt(Io: type) OpConstructor(Io, OpenAt) {
             callback: *const fn (*Op(Io, OpenAt)) callconv(.c) void,
         ) Op(Io, OpenAt) {
             return .{
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(OpenAt).init(.{
+                .header = .{
+                    .code = .openat,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(OpenAt).init(.{}),
             };
         }
     }.func;
@@ -447,14 +455,16 @@ pub fn close(Io: type) OpConstructor(Io, Close) {
             callback: *const fn (*Op(Io, Close)) callconv(.c) void,
         ) Op(Io, Close) {
             return .{
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(Close).init(.{
+                .header = .{
+                    .code = .close,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(Close).init(.{}),
             };
         }
     }.func;
@@ -468,14 +478,16 @@ pub fn pRead(Io: type) OpConstructor(Io, PRead) {
             callback: *const fn (*Op(Io, PRead)) callconv(.c) void,
         ) Op(Io, PRead) {
             return .{
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(PRead).init(.{
+                .header = .{
+                    .code = .pread,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(PRead).init(.{}),
             };
         }
     }.func;
@@ -489,14 +501,16 @@ pub fn pWrite(Io: type) OpConstructor(Io, PWrite) {
             callback: *const fn (*Op(Io, PWrite)) callconv(.c) void,
         ) Op(Io, PWrite) {
             return .{
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(PWrite).init(.{
+                .header = .{
+                    .code = .pwrite,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(PWrite).init(.{}),
             };
         }
     }.func;
@@ -510,14 +524,16 @@ pub fn fSync(Io: type) OpConstructor(Io, FSync) {
             callback: *const fn (*Op(Io, FSync)) callconv(.c) void,
         ) Op(Io, FSync) {
             return .{
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(FSync).init(.{
+                .header = .{
+                    .code = .fsync,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(FSync).init(.{}),
             };
         }
     }.func;
@@ -531,14 +547,16 @@ pub fn stat(Io: type) OpConstructor(Io, Stat) {
             callback: *const fn (*Op(Io, Stat)) callconv(.c) void,
         ) Op(Io, Stat) {
             return .{
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(Stat).init(.{
+                .header = .{
+                    .code = .stat,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(Stat).init(.{}),
             };
         }
     }.func;
@@ -552,14 +570,16 @@ pub fn getCwd(Io: type) OpConstructor(Io, GetCwd) {
             callback: *const fn (*Op(Io, GetCwd)) callconv(.c) void,
         ) Op(Io, GetCwd) {
             return .{
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(GetCwd).init(.{
+                .header = .{
+                    .code = .getcwd,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(GetCwd).init(.{}),
             };
         }
     }.func;
@@ -573,14 +593,16 @@ pub fn chDir(Io: type) OpConstructor(Io, ChDir) {
             callback: *const fn (*Op(Io, ChDir)) callconv(.c) void,
         ) Op(Io, ChDir) {
             return .{
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(ChDir).init(.{
+                .header = .{
+                    .code = .chdir,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(ChDir).init(.{}),
             };
         }
     }.func;
@@ -594,14 +616,16 @@ pub fn unlinkAt(Io: type) OpConstructor(Io, UnlinkAt) {
             callback: *const fn (*Op(Io, UnlinkAt)) callconv(.c) void,
         ) Op(Io, UnlinkAt) {
             return .{
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(UnlinkAt).init(.{
+                .header = .{
+                    .code = .unlinkat,
                     .user_data = user_data,
                     .callback = @as(
                         *const fn (*OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
-                }),
+                },
+                .data = data.toExtern(),
+                .private = Io.OpPrivateData(UnlinkAt).init(.{}),
             };
         }
     }.func;

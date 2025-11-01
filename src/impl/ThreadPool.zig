@@ -72,7 +72,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
     var done: u32 = 0;
     while (self.completed.pop()) |priv| {
         const op: *Op(io.NoOp) = @fieldParentPtr("private", priv);
-        op.private.doCallback();
+        op.header.callback(&op.header);
         done += 1;
     }
 
@@ -112,14 +112,8 @@ pub fn OpPrivateData(T: type) type {
         // queue_mpsc intrusive field.
         next: ?*OpPrivateData(T) = null,
 
-        callback: *const fn (op_h: *io.OpHeader) callconv(.c) void,
-        user_data: ?*anyopaque,
-
-        pub fn init(opts: anytype) OpPrivateData(T) {
-            return .{
-                .callback = opts.callback,
-                .user_data = opts.user_data,
-            };
+        pub fn init(_: anytype) OpPrivateData(T) {
+            return .{};
         }
 
         fn toOp(self: *OpPrivateData(T)) *Op(T) {
@@ -248,10 +242,6 @@ pub fn OpPrivateData(T: type) type {
                     }
                 },
             }
-        }
-
-        pub fn doCallback(self: *OpPrivateData(T)) void {
-            self.callback(@ptrCast(self.toNoOp()));
         }
     };
 }
