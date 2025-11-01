@@ -134,6 +134,15 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
                 if (unlinkat_op.data.remove_dir) posix.AT.REMOVEDIR else 0,
             );
         },
+        .socket => {
+            const socket_op = Op(io.Socket).fromHeaderUnsafe(op_h);
+            sqe.prep_socket(
+                @intFromEnum(socket_op.data.domain),
+                @intFromEnum(socket_op.data.protocol),
+                @intFromEnum(socket_op.data.protocol),
+                0,
+            );
+        },
     }
     sqe.user_data = @intFromPtr(op_h);
 }
@@ -353,6 +362,24 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                             .INVAL => unreachable,
                             // always a race condition
                             .BADF => unreachable,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    }
+                },
+                .socket => {
+                    const op = Op(io.UnlinkAt).fromHeaderUnsafe(op_h);
+                    if (cqe.res < 0) {
+                        const rc = errno(cqe.res);
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .ACCES => error.AccessDenied,
+                            .AFNOSUPPORT => error.AddressFamilyNotSupported,
+                            .INVAL => error.ProtocolFamilyNotAvailable,
+                            .MFILE => error.ProcessFdQuotaExceeded,
+                            .NFILE => error.SystemFdQuotaExceeded,
+                            .NOBUFS => error.SystemResources,
+                            .NOMEM => error.SystemResources,
+                            .PROTONOSUPPORT => error.ProtocolNotSupported,
+                            .PROTOTYPE => error.SocketTypeNotSupported,
                             else => |err| posix.unexpectedErrno(err),
                         });
                     }

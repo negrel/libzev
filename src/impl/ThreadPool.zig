@@ -241,6 +241,16 @@ pub fn OpPrivateData(T: type) type {
                         };
                     }
                 },
+                .socket => {
+                    const op = self.toOp();
+                    op.data.socket = std.posix.socket(
+                        @intFromEnum(op.data.domain),
+                        @intFromEnum(op.data.protocol),
+                        @intFromEnum(op.data.protocol),
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
+                    };
+                },
             }
         }
     };

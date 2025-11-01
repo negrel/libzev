@@ -16,6 +16,7 @@ pub const OpCode = enum(c_int) {
     getcwd,
     chdir,
     unlinkat,
+    socket,
 
     pub fn Data(self: @This()) type {
         return switch (self) {
@@ -30,6 +31,7 @@ pub const OpCode = enum(c_int) {
             .getcwd => GetCwd,
             .chdir => ChDir,
             .unlinkat => UnlinkAt,
+            .socket => Socket,
         };
     }
 };
@@ -387,6 +389,44 @@ pub const UnlinkAt = extern struct {
 
     pub fn result(self: *UnlinkAt) Error!void {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+    }
+};
+
+pub const Socket = extern struct {
+    pub const op_code = OpCode.socket;
+
+    pub const Error = std.posix.SocketError;
+
+    pub const Domain = enum(u32) {
+        Inet = std.posix.AF.INET,
+        Inet6 = std.posix.AF.INET6,
+    };
+
+    pub const Type = enum(u32) {
+        Stream = std.posix.SOCK.STREAM,
+        Datagram = std.posix.SOCK.DGRAM,
+        Raw = std.posix.SOCK.RAW,
+    };
+
+    pub const Protocol = enum(u32) {
+        Ip = std.posix.IPPROTO.IP,
+        IpV6 = std.posix.IPPROTO.IPV6,
+        Tcp = std.posix.IPPROTO.TCP,
+        Udp = std.posix.IPPROTO.UDP,
+        Icmp = std.posix.IPPROTO.ICMP,
+        IcmpV6 = std.posix.IPPROTO.ICMPV6,
+    };
+
+    domain: Domain,
+    socket_type: Type,
+    protocol: Protocol,
+
+    socket: std.posix.socket_t = undefined,
+    err_code: u16 = 0,
+
+    pub fn result(self: *Socket) Error!std.posix.socket_t {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+        return self.socket;
     }
 };
 
