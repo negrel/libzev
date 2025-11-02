@@ -57,7 +57,7 @@ pub const OpCode = enum(c_int) {
 pub const OpHeader = extern struct {
     code: OpCode,
 
-    callback: *const fn (op_h: *OpHeader) callconv(.c) void,
+    callback: *const fn (*anyopaque, op_h: *OpHeader) callconv(.c) void,
     user_data: ?*anyopaque,
 };
 
@@ -613,14 +613,14 @@ pub fn opInitOf(Io: type, T: type) OpConstructor(Io, T) {
         pub fn func(
             data: if (@hasDecl(T, "Intern")) T.Intern else T,
             user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, T)) callconv(.c) void,
+            callback: *const fn (*Io, *Op(Io, T)) callconv(.c) void,
         ) Op(Io, T) {
             return .{
                 .header = .{
                     .code = T.op_code,
                     .user_data = user_data,
                     .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
+                        *const fn (*anyopaque, *OpHeader) callconv(.c) void,
                         @ptrCast(callback),
                     ),
                 },
@@ -636,13 +636,13 @@ pub fn OpConstructor(Io: type, T: type) type {
         return *const fn (
             T.Intern,
             user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, T)) callconv(.c) void,
+            callback: *const fn (*Io, *Op(Io, T)) callconv(.c) void,
         ) Op(Io, T);
     } else {
         return *const fn (
             T,
             user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, T)) callconv(.c) void,
+            callback: *const fn (*Io, *Op(Io, T)) callconv(.c) void,
         ) Op(Io, T);
     }
 }

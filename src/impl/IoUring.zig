@@ -554,7 +554,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                 },
             }
 
-            op_h.callback(op_h);
+            op_h.callback(self, op_h);
         }
         self.active -= done;
 

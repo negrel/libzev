@@ -73,7 +73,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
     var done: u32 = 0;
     while (self.completed.pop()) |priv| {
         const op: *Op(io.NoOp) = @fieldParentPtr("private", priv);
-        op.header.callback(&op.header);
+        op.header.callback(self, &op.header);
         done += 1;
     }
 

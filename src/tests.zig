@@ -17,7 +17,7 @@ test "single noop" {
             const Static = struct {
                 var called: bool = undefined;
 
-                fn callback(_: *Io.Op(zev.NoOp)) callconv(.c) void {
+                fn callback(_: *Io, _: *Io.Op(zev.NoOp)) callconv(.c) void {
                     called = true;
                 }
             };
@@ -43,7 +43,7 @@ test "batch of noop" {
         fn tcase(Io: type) !void {
             const Static = struct {
                 var called: usize = undefined;
-                fn callback(_: *Io.Op(zev.NoOp)) callconv(.c) void {
+                fn callback(_: *Io, _: *Io.Op(zev.NoOp)) callconv(.c) void {
                     called += 1;
                 }
             };
@@ -73,11 +73,10 @@ test "batch of timeout" {
         fn tcase(Io: type) !void {
             const Static = struct {
                 var called: usize = undefined;
-                fn callback(_: *Io.Op(zev.TimeOut)) callconv(.c) void {
+                fn callback(_: *Io, _: *Io.Op(zev.TimeOut)) callconv(.c) void {
                     called += 1;
                 }
             };
-            Static.called = 0;
 
             var io: Io = .{};
             try io.init(.{});
@@ -107,13 +106,11 @@ test "openat/pread/close" {
                 var preadCalled: bool = undefined;
                 var read: std.fs.File.PReadError!usize = undefined;
 
-                fn preadCallback(iop: *Io.Op(zev.PRead)) callconv(.c) void {
+                fn preadCallback(_: *Io, iop: *Io.Op(zev.PRead)) callconv(.c) void {
                     preadCalled = true;
                     read = iop.data.result();
                 }
             };
-            Static.preadCalled = false;
-            Static.read = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -167,27 +164,21 @@ test "openat/pwrite/fsync/close/unlinkat" {
                 var fsync: std.fs.File.SyncError!void = undefined;
                 var unlinkAt: zev.UnlinkAt.Error!void = undefined;
 
-                fn pwriteCallback(iop: *Io.Op(zev.PWrite)) callconv(.c) void {
+                fn pwriteCallback(_: *Io, iop: *Io.Op(zev.PWrite)) callconv(.c) void {
                     pwriteCalled = true;
                     write = iop.data.write;
                 }
 
-                fn fsyncCallback(iop: *Io.Op(zev.FSync)) callconv(.c) void {
+                fn fsyncCallback(_: *Io, iop: *Io.Op(zev.FSync)) callconv(.c) void {
                     fsyncCalled = true;
                     fsync = iop.data.result();
                 }
 
-                fn unlinkAtCallback(iop: *Io.Op(zev.UnlinkAt)) callconv(.c) void {
+                fn unlinkAtCallback(_: *Io, iop: *Io.Op(zev.UnlinkAt)) callconv(.c) void {
                     unlinkAtCalled = true;
                     unlinkAt = iop.data.result();
                 }
             };
-            Static.pwriteCalled = false;
-            Static.fsyncCalled = false;
-            Static.unlinkAtCalled = false;
-            Static.write = undefined;
-            Static.fsync = undefined;
-            Static.unlinkAt = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -278,13 +269,11 @@ test "openat/stat/close" {
                 var statCalled: bool = undefined;
                 var stat: std.fs.File.StatError!zev.FileStat = undefined;
 
-                fn statCallback(iop: *Io.Op(zev.Stat)) callconv(.c) void {
+                fn statCallback(_: *Io, iop: *Io.Op(zev.Stat)) callconv(.c) void {
                     statCalled = true;
                     stat = iop.data.result();
                 }
             };
-            Static.statCalled = false;
-            Static.stat = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -328,13 +317,11 @@ test "getcwd" {
                 var callbackCalled: bool = undefined;
                 var cwd: zev.GetCwd.Error![]u8 = undefined;
 
-                fn getCwdCallback(iop: *Io.Op(zev.GetCwd)) callconv(.c) void {
+                fn getCwdCallback(_: *Io, iop: *Io.Op(zev.GetCwd)) callconv(.c) void {
                     callbackCalled = true;
                     cwd = iop.data.result();
                 }
             };
-            Static.callbackCalled = false;
-            Static.cwd = undefined;
 
             var allocator = std.heap.smp_allocator;
             var io: Io = .{};
@@ -369,13 +356,11 @@ test "chdir" {
                 var callbackCalled: bool = undefined;
                 var result: std.posix.ChangeCurDirError!void = undefined;
 
-                fn chdirCallback(iop: *Io.Op(zev.ChDir)) callconv(.c) void {
+                fn chdirCallback(_: *Io, iop: *Io.Op(zev.ChDir)) callconv(.c) void {
                     callbackCalled = true;
                     result = iop.data.result();
                 }
             };
-            Static.callbackCalled = false;
-            Static.result = undefined;
 
             var initial_cwd_buf: [std.posix.PATH_MAX]u8 = undefined;
             const initial_cwd = try std.process.getCwd(initial_cwd_buf[0..]);
@@ -422,36 +407,55 @@ test "socket/bind/listen/accept/recv/send/shutdown/closesocket" {
                 var send: zev.Send.Error!usize = undefined;
                 var shutdown: zev.Shutdown.Error!void = undefined;
 
-                fn socketCallback(op: *Io.Op(zev.Socket)) callconv(.c) void {
+                fn socketCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Socket),
+                ) callconv(.c) void {
                     socketCalled = true;
                     socket = op.data.result();
                 }
-                fn bindCallback(op: *Io.Op(zev.Bind)) callconv(.c) void {
+                fn bindCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Bind),
+                ) callconv(.c) void {
                     bindCalled = true;
                     bind = op.data.result();
                 }
 
-                fn listenCallback(op: *Io.Op(zev.Listen)) callconv(.c) void {
+                fn listenCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Listen),
+                ) callconv(.c) void {
                     listenCalled = true;
                     listen = op.data.result();
                 }
 
-                fn acceptCallback(op: *Io.Op(zev.Accept)) callconv(.c) void {
+                fn acceptCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Accept),
+                ) callconv(.c) void {
                     acceptCalled = true;
                     accept = op.data.result();
                 }
 
-                fn recvCallback(op: *Io.Op(zev.Recv)) callconv(.c) void {
+                fn recvCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Recv),
+                ) callconv(.c) void {
                     recvCalled = true;
                     recv = op.data.result();
                 }
 
-                fn sendCallback(op: *Io.Op(zev.Send)) callconv(.c) void {
+                fn sendCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Send),
+                ) callconv(.c) void {
                     sendCalled = true;
                     send = op.data.result();
                 }
 
                 fn shutdownCallback(
+                    _: *Io,
                     op: *Io.Op(zev.Shutdown),
                 ) callconv(.c) void {
                     shutdownCalled = true;
@@ -459,6 +463,7 @@ test "socket/bind/listen/accept/recv/send/shutdown/closesocket" {
                 }
 
                 fn closeSocketCallback(
+                    _: *Io,
                     _: *Io.Op(zev.CloseSocket),
                 ) callconv(.c) void {
                     closeSocketCalled = true;
@@ -494,20 +499,6 @@ test "socket/bind/listen/accept/recv/send/shutdown/closesocket" {
                     stream.close();
                 }
             };
-            Static.socketCalled = false;
-            Static.bindCalled = false;
-            Static.listenCalled = false;
-            Static.acceptCalled = false;
-            Static.recvCalled = false;
-            Static.sendCalled = false;
-            Static.shutdownCalled = false;
-            Static.socket = undefined;
-            Static.bind = undefined;
-            Static.listen = undefined;
-            Static.accept = undefined;
-            Static.recv = undefined;
-            Static.send = undefined;
-            Static.shutdown = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -684,26 +675,39 @@ test "socket/connect/send/recv/shutdown/closesocket" {
                 var recv: zev.Recv.Error!usize = undefined;
                 var shutdown: zev.Shutdown.Error!void = undefined;
 
-                fn socketCallback(op: *Io.Op(zev.Socket)) callconv(.c) void {
+                fn socketCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Socket),
+                ) callconv(.c) void {
                     socketCalled = true;
                     socket = op.data.result();
                 }
-                fn connectCallback(op: *Io.Op(zev.Connect)) callconv(.c) void {
+                fn connectCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Connect),
+                ) callconv(.c) void {
                     connectCalled = true;
                     connect = op.data.result();
                 }
 
-                fn sendCallback(op: *Io.Op(zev.Send)) callconv(.c) void {
+                fn sendCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Send),
+                ) callconv(.c) void {
                     sendCalled = true;
                     send = op.data.result();
                 }
 
-                fn recvCallback(op: *Io.Op(zev.Recv)) callconv(.c) void {
+                fn recvCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Recv),
+                ) callconv(.c) void {
                     recvCalled = true;
                     recv = op.data.result();
                 }
 
                 fn shutdownCallback(
+                    _: *Io,
                     op: *Io.Op(zev.Shutdown),
                 ) callconv(.c) void {
                     shutdownCalled = true;
@@ -711,6 +715,7 @@ test "socket/connect/send/recv/shutdown/closesocket" {
                 }
 
                 fn closeSocketCallback(
+                    _: *Io,
                     _: *Io.Op(zev.CloseSocket),
                 ) callconv(.c) void {
                     closeSocketCalled = true;
@@ -737,16 +742,6 @@ test "socket/connect/send/recv/shutdown/closesocket" {
                     srv.deinit();
                 }
             };
-            Static.socketCalled = false;
-            Static.connectCalled = false;
-            Static.recvCalled = false;
-            Static.sendCalled = false;
-            Static.shutdownCalled = false;
-            Static.socket = undefined;
-            Static.connect = undefined;
-            Static.recv = undefined;
-            Static.send = undefined;
-            Static.shutdown = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -913,7 +908,7 @@ const testutils = struct {
             var callbackCalled: bool = undefined;
             var file: std.fs.File.OpenError!std.fs.File = undefined;
 
-            fn openAtCallback(op: *Io.Op(zev.OpenAt)) callconv(.c) void {
+            fn openAtCallback(_: *Io, op: *Io.Op(zev.OpenAt)) callconv(.c) void {
                 callbackCalled = true;
                 file = op.data.result();
             }
@@ -940,7 +935,7 @@ const testutils = struct {
         const Static = struct {
             var callbackCalled: bool = undefined;
 
-            fn closeCallback(_: *Io.Op(zev.Close)) callconv(.c) void {
+            fn closeCallback(_: *Io, _: *Io.Op(zev.Close)) callconv(.c) void {
                 callbackCalled = true;
             }
         };
