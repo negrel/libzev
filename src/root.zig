@@ -3,13 +3,12 @@ const std = @import("std");
 const impl = @import("./impl.zig");
 const io = @import("./io.zig");
 
-pub const OpCode = io.OpCode;
+pub const ThreadPool = @import("./ThreadPool.zig");
 
 pub const Impl = impl.Impl;
 pub const Io = Impl.default().Io();
 
-pub const PollMode = io.PollMode;
-
+// io.Op(...)
 pub const NoOp = io.NoOp;
 pub const TimeOut = io.TimeOut;
 pub const OpenAt = io.OpenAt;
@@ -31,4 +30,6 @@ pub const CloseSocket = io.CloseSocket;
 pub const Recv = io.Recv;
 pub const Send = io.Send;
 
+pub const OpCode = io.OpCode;
+pub const PollMode = io.PollMode;
 pub const FileStat = io.FileStat;

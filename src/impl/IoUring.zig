@@ -237,8 +237,9 @@ pub fn submit(self: *Io) io.SubmitError!u32 {
 
 pub fn poll(self: *Io, mode: io.PollMode) !u32 {
     var cqes: [256]linux.io_uring_cqe = undefined;
+    var done: u32 = 0;
     while (true) {
-        const done = self.ring.copy_cqes(
+        const copied = self.ring.copy_cqes(
             cqes[0..cqes.len],
             switch (mode) {
                 .all => @min(self.active, cqes.len),
@@ -249,321 +250,327 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
             error.SignalInterrupt => continue,
             else => return err,
         };
+        done += copied;
 
-        for (0..done) |i| {
-            const cqe = cqes[i];
-            const op_h: *io.OpHeader = @ptrFromInt(cqe.user_data);
-
-            switch (op_h.code) {
-                .noop, .timeout => {},
-                .openat => {
-                    const op = Op(io.OpenAt).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .INVAL => error.BadPathName,
-                            .ACCES => error.AccessDenied,
-                            .FBIG => error.FileTooBig,
-                            .OVERFLOW => error.FileTooBig,
-                            .ISDIR => error.IsDir,
-                            .LOOP => error.SymLinkLoop,
-                            .MFILE => error.ProcessFdQuotaExceeded,
-                            .NAMETOOLONG => error.NameTooLong,
-                            .NFILE => error.SystemFdQuotaExceeded,
-                            .NODEV => error.NoDevice,
-                            .NOENT => error.FileNotFound,
-                            .SRCH => error.ProcessNotFound,
-                            .NOMEM => error.SystemResources,
-                            .NOSPC => error.NoSpaceLeft,
-                            .NOTDIR => error.NotDir,
-                            .PERM => error.PermissionDenied,
-                            .EXIST => error.PathAlreadyExists,
-                            .BUSY => error.DeviceBusy,
-                            .OPNOTSUPP => error.FileLocksNotSupported,
-                            .AGAIN => error.WouldBlock,
-                            .TXTBSY => error.FileBusy,
-                            .NXIO => error.NoDevice,
-                            .ILSEQ => |err| if (builtin.os.tag == .wasi)
-                                error.InvalidUtf8
-                            else
-                                posix.unexpectedErrno(err),
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    } else {
-                        op.data.file = cqe.res;
-                    }
-                },
-                .close => {},
-                .pread => {
-                    const op = Op(io.PRead).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .SRCH => error.ProcessNotFound,
-                            .AGAIN => error.WouldBlock,
-                            .CANCELED => error.Canceled,
-                            // Can be a race condition.
-                            .BADF => error.NotOpenForReading,
-                            .IO => error.InputOutput,
-                            .ISDIR => error.IsDir,
-                            .NOBUFS => error.SystemResources,
-                            .NOMEM => error.SystemResources,
-                            .NOTCONN => error.SocketNotConnected,
-                            .CONNRESET => error.ConnectionResetByPeer,
-                            .TIMEDOUT => error.ConnectionTimedOut,
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    } else {
-                        op.data.read = @intCast(cqe.res);
-                    }
-                },
-                .pwrite => {
-                    const op = Op(io.PWrite).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .INVAL => error.InvalidArgument,
-                            .SRCH => error.ProcessNotFound,
-                            .AGAIN => error.WouldBlock,
-                            // can be a race condition.
-                            .BADF => error.NotOpenForWriting,
-                            // `connect` was never called.
-                            .DQUOT => error.DiskQuota,
-                            .FBIG => error.FileTooBig,
-                            .IO => error.InputOutput,
-                            .NOSPC => error.NoSpaceLeft,
-                            .ACCES => error.AccessDenied,
-                            .PERM => error.PermissionDenied,
-                            .PIPE => error.BrokenPipe,
-                            .CONNRESET => error.ConnectionResetByPeer,
-                            .BUSY => error.DeviceBusy,
-                            .NXIO => error.NoDevice,
-                            .MSGSIZE => error.MessageTooBig,
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    } else {
-                        op.data.write = @intCast(cqe.res);
-                        op.data.err_code = 0;
-                    }
-                },
-                .fsync => {
-                    const op = Op(io.FSync).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .IO => error.InputOutput,
-                            .NOSPC => error.NoSpaceLeft,
-                            .DQUOT => error.DiskQuota,
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    }
-                },
-                .stat => {
-                    const op = Op(io.Stat).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .NOMEM => error.SystemResources,
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    } else {
-                        const std_stat = std.fs.File.Stat.fromLinux(
-                            op.private.uring_data,
-                        );
-                        op.data.stat = .fromStdFsFileStat(std_stat);
-                    }
-                },
-                .getcwd, .chdir => unreachable,
-                .unlinkat => {
-                    const op = Op(io.UnlinkAt).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .ACCES => error.AccessDenied,
-                            .PERM => error.PermissionDenied,
-                            .BUSY => error.FileBusy,
-                            .IO => error.FileSystem,
-                            .ISDIR => error.IsDir,
-                            .LOOP => error.SymLinkLoop,
-                            .NAMETOOLONG => error.NameTooLong,
-                            .NOENT => error.FileNotFound,
-                            .NOTDIR => error.NotDir,
-                            .NOMEM => error.SystemResources,
-                            .ROFS => error.ReadOnlyFileSystem,
-                            .EXIST => if (op.data.remove_dir)
-                                error.DirNotEmpty
-                            else
-                                unreachable,
-                            .NOTEMPTY => error.DirNotEmpty,
-                            .ILSEQ => |err| if (builtin.os.tag == .wasi)
-                                error.InvalidUtf8
-                            else
-                                posix.unexpectedErrno(err),
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    }
-                },
-                .socket => {
-                    const op = Op(io.Socket).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .ACCES => error.AccessDenied,
-                            .AFNOSUPPORT => error.AddressFamilyNotSupported,
-                            .INVAL => error.ProtocolFamilyNotAvailable,
-                            .MFILE => error.ProcessFdQuotaExceeded,
-                            .NFILE => error.SystemFdQuotaExceeded,
-                            .NOBUFS => error.SystemResources,
-                            .NOMEM => error.SystemResources,
-                            .PROTONOSUPPORT => error.ProtocolNotSupported,
-                            .PROTOTYPE => error.SocketTypeNotSupported,
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    } else {
-                        op.data.socket = cqe.res;
-                    }
-                },
-                .bind => {
-                    const op = Op(io.Bind).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .ACCES, .PERM => error.AccessDenied,
-                            .ADDRINUSE => error.AddressInUse,
-                            .AFNOSUPPORT => error.AddressFamilyNotSupported,
-                            .ADDRNOTAVAIL => error.AddressNotAvailable,
-                            .LOOP => error.SymLinkLoop,
-                            .NAMETOOLONG => error.NameTooLong,
-                            .NOENT => error.FileNotFound,
-                            .NOMEM => error.SystemResources,
-                            .NOTDIR => error.NotDir,
-                            .ROFS => error.ReadOnlyFileSystem,
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    }
-                },
-                .listen => {
-                    const op = Op(io.Listen).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .ADDRINUSE => error.AddressInUse,
-                            .NOTSOCK => error.FileDescriptorNotASocket,
-                            .OPNOTSUPP => error.OperationNotSupported,
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    }
-                },
-                .accept => {
-                    const op = Op(io.Accept).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .AGAIN => error.WouldBlock,
-                            .CONNABORTED => error.ConnectionAborted,
-                            .INVAL => error.SocketNotListening,
-                            .MFILE => error.ProcessFdQuotaExceeded,
-                            .NFILE => error.SystemFdQuotaExceeded,
-                            .NOBUFS => error.SystemResources,
-                            .NOMEM => error.SystemResources,
-                            .PROTO => error.ProtocolFailure,
-                            .PERM => error.BlockedByFirewall,
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    } else {
-                        op.data.accepted_socket = @intCast(cqe.res);
-                    }
-                },
-                .connect => {
-                    const op = Op(io.Connect).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .ACCES => error.AccessDenied,
-                            .PERM => error.PermissionDenied,
-                            .ADDRINUSE => error.AddressInUse,
-                            .ADDRNOTAVAIL => error.AddressNotAvailable,
-                            .AFNOSUPPORT => error.AddressFamilyNotSupported,
-                            .AGAIN, .INPROGRESS => error.WouldBlock,
-                            .ALREADY => error.ConnectionPending,
-                            .CONNREFUSED => error.ConnectionRefused,
-                            .CONNRESET => error.ConnectionResetByPeer,
-                            .HOSTUNREACH => error.NetworkUnreachable,
-                            .NETUNREACH => error.NetworkUnreachable,
-                            .TIMEDOUT => error.ConnectionTimedOut,
-                            // Returned when socket is AF.UNIX and the given
-                            // path does not exist.
-                            .NOENT => error.FileNotFound,
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    }
-                },
-                .shutdown => {
-                    const op = Op(io.Shutdown).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .NOTCONN => return error.SocketNotConnected,
-                            .NOBUFS => return error.SystemResources,
-                            else => |err| return posix.unexpectedErrno(err),
-                        });
-                    }
-                },
-                .closesocket => {},
-                .recv => {
-                    const op = Op(io.Recv).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .NOTCONN => error.SocketNotConnected,
-                            .AGAIN => error.WouldBlock,
-                            .NOMEM => error.SystemResources,
-                            .CONNREFUSED => error.ConnectionRefused,
-                            .CONNRESET => error.ConnectionResetByPeer,
-                            .TIMEDOUT => error.ConnectionTimedOut,
-                            else => |err| posix.unexpectedErrno(err),
-                        });
-                    } else op.data.recv = @intCast(cqe.res);
-                },
-                .send => {
-                    const op = Op(io.Send).fromHeader(op_h);
-                    if (cqe.res < 0) {
-                        const rc = errno(cqe.res);
-                        op.data.err_code = @intFromError(switch (rc) {
-                            .ACCES => error.AccessDenied,
-                            .AGAIN => error.WouldBlock,
-                            .ALREADY => error.FastOpenAlreadyInProgress,
-                            .CONNREFUSED => error.ConnectionRefused,
-                            .CONNRESET => error.ConnectionResetByPeer,
-                            // connection-mode socket was connected already but
-                            // a recipient was specified
-                            .MSGSIZE => error.MessageTooBig,
-                            .NOBUFS => error.SystemResources,
-                            .NOMEM => error.SystemResources,
-                            // Some bit in the flags argument is inappropriate
-                            // for the socket type.
-                            .PIPE => error.BrokenPipe,
-                            .LOOP => error.SymLinkLoop,
-                            .NOENT => error.FileNotFound,
-                            .NOTDIR => error.NotDir,
-                            .NOTCONN => error.SocketNotConnected,
-                            .NETDOWN => error.NetworkSubsystemFailed,
-                            else => |err| return posix.unexpectedErrno(err),
-                        });
-                    } else op.data.send = @intCast(cqe.res);
-                },
-            }
-
-            op_h.callback(self, op_h);
+        for (cqes[0..copied]) |*cqe| {
+            self.processCompletion(cqe);
         }
-        self.active -= done;
 
-        return done + try self.tpool.poll(switch (mode) {
-            .all => .all,
-            .one => if (done == 0) .one else .nowait,
-            .nowait => .nowait,
-        });
+        if (copied < cqes.len) break;
     }
+
+    self.active -= done;
+
+    return done + try self.tpool.poll(switch (mode) {
+        .all => .all,
+        .one => if (done == 0) .one else .nowait,
+        .nowait => .nowait,
+    });
+}
+
+fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
+    const op_h: *io.OpHeader = @ptrFromInt(cqe.user_data);
+    switch (op_h.code) {
+        .noop, .timeout => {},
+        .openat => {
+            const op = Op(io.OpenAt).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .INVAL => error.BadPathName,
+                    .ACCES => error.AccessDenied,
+                    .FBIG => error.FileTooBig,
+                    .OVERFLOW => error.FileTooBig,
+                    .ISDIR => error.IsDir,
+                    .LOOP => error.SymLinkLoop,
+                    .MFILE => error.ProcessFdQuotaExceeded,
+                    .NAMETOOLONG => error.NameTooLong,
+                    .NFILE => error.SystemFdQuotaExceeded,
+                    .NODEV => error.NoDevice,
+                    .NOENT => error.FileNotFound,
+                    .SRCH => error.ProcessNotFound,
+                    .NOMEM => error.SystemResources,
+                    .NOSPC => error.NoSpaceLeft,
+                    .NOTDIR => error.NotDir,
+                    .PERM => error.PermissionDenied,
+                    .EXIST => error.PathAlreadyExists,
+                    .BUSY => error.DeviceBusy,
+                    .OPNOTSUPP => error.FileLocksNotSupported,
+                    .AGAIN => error.WouldBlock,
+                    .TXTBSY => error.FileBusy,
+                    .NXIO => error.NoDevice,
+                    .ILSEQ => |err| if (builtin.os.tag == .wasi)
+                        error.InvalidUtf8
+                    else
+                        posix.unexpectedErrno(err),
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            } else {
+                op.data.file = cqe.res;
+            }
+        },
+        .close => {},
+        .pread => {
+            const op = Op(io.PRead).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .SRCH => error.ProcessNotFound,
+                    .AGAIN => error.WouldBlock,
+                    .CANCELED => error.Canceled,
+                    // Can be a race condition.
+                    .BADF => error.NotOpenForReading,
+                    .IO => error.InputOutput,
+                    .ISDIR => error.IsDir,
+                    .NOBUFS => error.SystemResources,
+                    .NOMEM => error.SystemResources,
+                    .NOTCONN => error.SocketNotConnected,
+                    .CONNRESET => error.ConnectionResetByPeer,
+                    .TIMEDOUT => error.ConnectionTimedOut,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            } else {
+                op.data.read = @intCast(cqe.res);
+            }
+        },
+        .pwrite => {
+            const op = Op(io.PWrite).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .INVAL => error.InvalidArgument,
+                    .SRCH => error.ProcessNotFound,
+                    .AGAIN => error.WouldBlock,
+                    // can be a race condition.
+                    .BADF => error.NotOpenForWriting,
+                    // `connect` was never called.
+                    .DQUOT => error.DiskQuota,
+                    .FBIG => error.FileTooBig,
+                    .IO => error.InputOutput,
+                    .NOSPC => error.NoSpaceLeft,
+                    .ACCES => error.AccessDenied,
+                    .PERM => error.PermissionDenied,
+                    .PIPE => error.BrokenPipe,
+                    .CONNRESET => error.ConnectionResetByPeer,
+                    .BUSY => error.DeviceBusy,
+                    .NXIO => error.NoDevice,
+                    .MSGSIZE => error.MessageTooBig,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            } else {
+                op.data.write = @intCast(cqe.res);
+                op.data.err_code = 0;
+            }
+        },
+        .fsync => {
+            const op = Op(io.FSync).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .IO => error.InputOutput,
+                    .NOSPC => error.NoSpaceLeft,
+                    .DQUOT => error.DiskQuota,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            }
+        },
+        .stat => {
+            const op = Op(io.Stat).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .NOMEM => error.SystemResources,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            } else {
+                const std_stat = std.fs.File.Stat.fromLinux(
+                    op.private.uring_data,
+                );
+                op.data.stat = .fromStdFsFileStat(std_stat);
+            }
+        },
+        .getcwd, .chdir => unreachable,
+        .unlinkat => {
+            const op = Op(io.UnlinkAt).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .ACCES => error.AccessDenied,
+                    .PERM => error.PermissionDenied,
+                    .BUSY => error.FileBusy,
+                    .IO => error.FileSystem,
+                    .ISDIR => error.IsDir,
+                    .LOOP => error.SymLinkLoop,
+                    .NAMETOOLONG => error.NameTooLong,
+                    .NOENT => error.FileNotFound,
+                    .NOTDIR => error.NotDir,
+                    .NOMEM => error.SystemResources,
+                    .ROFS => error.ReadOnlyFileSystem,
+                    .EXIST => if (op.data.remove_dir)
+                        error.DirNotEmpty
+                    else
+                        unreachable,
+                    .NOTEMPTY => error.DirNotEmpty,
+                    .ILSEQ => |err| if (builtin.os.tag == .wasi)
+                        error.InvalidUtf8
+                    else
+                        posix.unexpectedErrno(err),
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            }
+        },
+        .socket => {
+            const op = Op(io.Socket).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .ACCES => error.AccessDenied,
+                    .AFNOSUPPORT => error.AddressFamilyNotSupported,
+                    .INVAL => error.ProtocolFamilyNotAvailable,
+                    .MFILE => error.ProcessFdQuotaExceeded,
+                    .NFILE => error.SystemFdQuotaExceeded,
+                    .NOBUFS => error.SystemResources,
+                    .NOMEM => error.SystemResources,
+                    .PROTONOSUPPORT => error.ProtocolNotSupported,
+                    .PROTOTYPE => error.SocketTypeNotSupported,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            } else {
+                op.data.socket = cqe.res;
+            }
+        },
+        .bind => {
+            const op = Op(io.Bind).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .ACCES, .PERM => error.AccessDenied,
+                    .ADDRINUSE => error.AddressInUse,
+                    .AFNOSUPPORT => error.AddressFamilyNotSupported,
+                    .ADDRNOTAVAIL => error.AddressNotAvailable,
+                    .LOOP => error.SymLinkLoop,
+                    .NAMETOOLONG => error.NameTooLong,
+                    .NOENT => error.FileNotFound,
+                    .NOMEM => error.SystemResources,
+                    .NOTDIR => error.NotDir,
+                    .ROFS => error.ReadOnlyFileSystem,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            }
+        },
+        .listen => {
+            const op = Op(io.Listen).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .ADDRINUSE => error.AddressInUse,
+                    .NOTSOCK => error.FileDescriptorNotASocket,
+                    .OPNOTSUPP => error.OperationNotSupported,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            }
+        },
+        .accept => {
+            const op = Op(io.Accept).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .AGAIN => error.WouldBlock,
+                    .CONNABORTED => error.ConnectionAborted,
+                    .INVAL => error.SocketNotListening,
+                    .MFILE => error.ProcessFdQuotaExceeded,
+                    .NFILE => error.SystemFdQuotaExceeded,
+                    .NOBUFS => error.SystemResources,
+                    .NOMEM => error.SystemResources,
+                    .PROTO => error.ProtocolFailure,
+                    .PERM => error.BlockedByFirewall,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            } else {
+                op.data.accepted_socket = @intCast(cqe.res);
+            }
+        },
+        .connect => {
+            const op = Op(io.Connect).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .ACCES => error.AccessDenied,
+                    .PERM => error.PermissionDenied,
+                    .ADDRINUSE => error.AddressInUse,
+                    .ADDRNOTAVAIL => error.AddressNotAvailable,
+                    .AFNOSUPPORT => error.AddressFamilyNotSupported,
+                    .AGAIN, .INPROGRESS => error.WouldBlock,
+                    .ALREADY => error.ConnectionPending,
+                    .CONNREFUSED => error.ConnectionRefused,
+                    .CONNRESET => error.ConnectionResetByPeer,
+                    .HOSTUNREACH => error.NetworkUnreachable,
+                    .NETUNREACH => error.NetworkUnreachable,
+                    .TIMEDOUT => error.ConnectionTimedOut,
+                    // Returned when socket is AF.UNIX and the given
+                    // path does not exist.
+                    .NOENT => error.FileNotFound,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            }
+        },
+        .shutdown => {
+            const op = Op(io.Shutdown).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .NOTCONN => error.SocketNotConnected,
+                    .NOBUFS => error.SystemResources,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            }
+        },
+        .closesocket => {},
+        .recv => {
+            const op = Op(io.Recv).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .NOTCONN => error.SocketNotConnected,
+                    .AGAIN => error.WouldBlock,
+                    .NOMEM => error.SystemResources,
+                    .CONNREFUSED => error.ConnectionRefused,
+                    .CONNRESET => error.ConnectionResetByPeer,
+                    .TIMEDOUT => error.ConnectionTimedOut,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            } else op.data.recv = @intCast(cqe.res);
+        },
+        .send => {
+            const op = Op(io.Send).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .ACCES => error.AccessDenied,
+                    .AGAIN => error.WouldBlock,
+                    .ALREADY => error.FastOpenAlreadyInProgress,
+                    .CONNREFUSED => error.ConnectionRefused,
+                    .CONNRESET => error.ConnectionResetByPeer,
+                    // connection-mode socket was connected already but
+                    // a recipient was specified
+                    .MSGSIZE => error.MessageTooBig,
+                    .NOBUFS => error.SystemResources,
+                    .NOMEM => error.SystemResources,
+                    // Some bit in the flags argument is inappropriate
+                    // for the socket type.
+                    .PIPE => error.BrokenPipe,
+                    .LOOP => error.SymLinkLoop,
+                    .NOENT => error.FileNotFound,
+                    .NOTDIR => error.NotDir,
+                    .NOTCONN => error.SocketNotConnected,
+                    .NETDOWN => error.NetworkSubsystemFailed,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            } else op.data.send = @intCast(cqe.res);
+        },
+    }
+
+    op_h.callback(self, op_h);
 }
 
 fn errno(err_code: i32) linux.E {
