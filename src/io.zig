@@ -17,6 +17,14 @@ pub const OpCode = enum(c_int) {
     chdir,
     unlinkat,
     socket,
+    bind,
+    listen,
+    accept,
+    connect,
+    shutdown,
+    closesocket,
+    recv,
+    send,
 
     pub fn Data(self: @This()) type {
         return switch (self) {
@@ -32,6 +40,14 @@ pub const OpCode = enum(c_int) {
             .chdir => ChDir,
             .unlinkat => UnlinkAt,
             .socket => Socket,
+            .bind => Bind,
+            .listen => Listen,
+            .accept => Accept,
+            .connect => Connect,
+            .shutdown => Shutdown,
+            .closesocket => CloseSocket,
+            .recv => Recv,
+            .send => Send,
         };
     }
 };
@@ -64,7 +80,8 @@ pub fn Op(Io: type, T: type) type {
         // Operation data.
         data: T,
 
-        pub fn fromHeaderUnsafe(h: *OpHeader) *Op(Io, T) {
+        pub fn fromHeader(h: *OpHeader) *Op(Io, T) {
+            std.debug.assert(h.code == T.op_code);
             return @alignCast(@fieldParentPtr("header", h));
         }
     };
@@ -430,6 +447,190 @@ pub const Socket = extern struct {
     }
 };
 
+pub const Bind = extern struct {
+    pub const op_code = OpCode.bind;
+
+    pub const Error = std.posix.BindError;
+
+    socket: std.posix.socket_t,
+    address: *std.posix.sockaddr,
+    address_len: std.posix.socklen_t,
+
+    err_code: u16 = 0,
+
+    pub fn result(self: *Bind) Error!void {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+    }
+};
+
+pub const Listen = extern struct {
+    pub const op_code = OpCode.listen;
+
+    pub const Error = std.posix.ListenError;
+
+    socket: std.posix.socket_t,
+    backlog: u32,
+
+    err_code: u16 = 0,
+
+    pub fn result(self: *Listen) Error!void {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+    }
+};
+
+pub const Accept = extern struct {
+    pub const op_code = OpCode.accept;
+
+    pub const Error = std.posix.AcceptError;
+
+    socket: std.posix.socket_t,
+    address: ?*std.posix.sockaddr,
+    address_len: ?*std.posix.socklen_t,
+    flags: u32,
+
+    accepted_socket: std.posix.socket_t = undefined,
+    err_code: u16 = 0,
+
+    pub fn result(self: *Accept) Error!std.posix.socket_t {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+        return self.accepted_socket;
+    }
+};
+
+pub const Connect = extern struct {
+    pub const op_code = OpCode.connect;
+
+    pub const Error = std.posix.ConnectError;
+
+    socket: std.posix.socket_t,
+    address: *std.posix.sockaddr,
+    address_len: std.posix.socklen_t,
+
+    err_code: u16 = 0,
+
+    pub fn result(self: *Connect) Error!void {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+    }
+};
+
+pub const Shutdown = extern struct {
+    pub const op_code = OpCode.shutdown;
+
+    pub const Error = std.posix.ShutdownError;
+
+    pub const How = enum(u32) {
+        recv,
+        send,
+        both,
+    };
+
+    socket: std.posix.socket_t,
+    how: How,
+
+    err_code: u16 = 0,
+
+    pub fn result(self: *Shutdown) Error!void {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+    }
+};
+
+pub const CloseSocket = extern struct {
+    pub const op_code = OpCode.closesocket;
+
+    socket: std.posix.socket_t,
+};
+
+pub const Recv = extern struct {
+    pub const op_code = OpCode.recv;
+
+    pub const Error = std.posix.RecvFromError;
+
+    pub const Intern = struct {
+        socket: std.posix.socket_t,
+        buffer: []u8,
+        flags: u32,
+
+        pub fn toExtern(self: Intern) Recv {
+            return .{
+                .socket = self.socket,
+                .buffer = self.buffer.ptr,
+                .buffer_len = self.buffer.len,
+                .flags = self.flags,
+            };
+        }
+    };
+
+    socket: std.posix.socket_t,
+    buffer: [*c]u8,
+    buffer_len: usize,
+    flags: u32,
+
+    recv: usize = undefined,
+    err_code: u16 = 0,
+
+    pub fn result(self: *Recv) Error!usize {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+        return self.recv;
+    }
+};
+
+pub const Send = extern struct {
+    pub const op_code = OpCode.send;
+
+    pub const Error = std.posix.SendError;
+
+    pub const Intern = struct {
+        socket: std.posix.socket_t,
+        buffer: []const u8,
+        flags: u32,
+
+        pub fn toExtern(self: Intern) Send {
+            return .{
+                .socket = self.socket,
+                .buffer = self.buffer.ptr,
+                .buffer_len = self.buffer.len,
+                .flags = self.flags,
+            };
+        }
+    };
+
+    socket: std.posix.socket_t,
+    buffer: [*c]const u8,
+    buffer_len: usize,
+    flags: u32,
+
+    send: usize = undefined,
+    err_code: u16 = 0,
+
+    pub fn result(self: *Send) Error!usize {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+        return self.send;
+    }
+};
+
+pub fn opInitOf(Io: type, T: type) OpConstructor(Io, T) {
+    return struct {
+        pub fn func(
+            data: if (@hasDecl(T, "Intern")) T.Intern else T,
+            user_data: ?*anyopaque,
+            callback: *const fn (*Op(Io, T)) callconv(.c) void,
+        ) Op(Io, T) {
+            return .{
+                .header = .{
+                    .code = T.op_code,
+                    .user_data = user_data,
+                    .callback = @as(
+                        *const fn (*OpHeader) callconv(.c) void,
+                        @ptrCast(callback),
+                    ),
+                },
+                .data = if (@hasDecl(T, "Intern")) data.toExtern() else data,
+                .private = Io.OpPrivateData(T).init(.{}),
+            };
+        }
+    }.func;
+}
+
 pub fn OpConstructor(Io: type, T: type) type {
     if (@hasDecl(T, "Intern")) {
         return *const fn (
@@ -444,259 +645,6 @@ pub fn OpConstructor(Io: type, T: type) type {
             callback: *const fn (*Op(Io, T)) callconv(.c) void,
         ) Op(Io, T);
     }
-}
-
-pub fn noOp(Io: type) OpConstructor(Io, NoOp) {
-    return struct {
-        pub fn func(
-            data: NoOp,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, NoOp)) callconv(.c) void,
-        ) Op(Io, NoOp) {
-            return .{
-                .header = .{
-                    .code = .noop,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data,
-                .private = Io.OpPrivateData(NoOp).init(.{}),
-            };
-        }
-    }.func;
-}
-
-pub fn timeOut(Io: type) OpConstructor(Io, TimeOut) {
-    return struct {
-        pub fn func(
-            data: TimeOut,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, TimeOut)) callconv(.c) void,
-        ) Op(Io, TimeOut) {
-            return .{
-                .header = .{
-                    .code = .timeout,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data,
-                .private = Io.OpPrivateData(TimeOut).init(.{}),
-            };
-        }
-    }.func;
-}
-
-pub fn openAt(Io: type) OpConstructor(Io, OpenAt) {
-    return struct {
-        pub fn func(
-            data: OpenAt.Intern,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, OpenAt)) callconv(.c) void,
-        ) Op(Io, OpenAt) {
-            return .{
-                .header = .{
-                    .code = .openat,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(OpenAt).init(.{}),
-            };
-        }
-    }.func;
-}
-
-pub fn close(Io: type) OpConstructor(Io, Close) {
-    return struct {
-        pub fn func(
-            data: Close.Intern,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, Close)) callconv(.c) void,
-        ) Op(Io, Close) {
-            return .{
-                .header = .{
-                    .code = .close,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(Close).init(.{}),
-            };
-        }
-    }.func;
-}
-
-pub fn pRead(Io: type) OpConstructor(Io, PRead) {
-    return struct {
-        pub fn func(
-            data: PRead.Intern,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, PRead)) callconv(.c) void,
-        ) Op(Io, PRead) {
-            return .{
-                .header = .{
-                    .code = .pread,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(PRead).init(.{}),
-            };
-        }
-    }.func;
-}
-
-pub fn pWrite(Io: type) OpConstructor(Io, PWrite) {
-    return struct {
-        pub fn func(
-            data: PWrite.Intern,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, PWrite)) callconv(.c) void,
-        ) Op(Io, PWrite) {
-            return .{
-                .header = .{
-                    .code = .pwrite,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(PWrite).init(.{}),
-            };
-        }
-    }.func;
-}
-
-pub fn fSync(Io: type) OpConstructor(Io, FSync) {
-    return struct {
-        pub fn func(
-            data: FSync.Intern,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, FSync)) callconv(.c) void,
-        ) Op(Io, FSync) {
-            return .{
-                .header = .{
-                    .code = .fsync,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(FSync).init(.{}),
-            };
-        }
-    }.func;
-}
-
-pub fn stat(Io: type) OpConstructor(Io, Stat) {
-    return struct {
-        pub fn func(
-            data: Stat.Intern,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, Stat)) callconv(.c) void,
-        ) Op(Io, Stat) {
-            return .{
-                .header = .{
-                    .code = .stat,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(Stat).init(.{}),
-            };
-        }
-    }.func;
-}
-
-pub fn getCwd(Io: type) OpConstructor(Io, GetCwd) {
-    return struct {
-        pub fn func(
-            data: GetCwd.Intern,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, GetCwd)) callconv(.c) void,
-        ) Op(Io, GetCwd) {
-            return .{
-                .header = .{
-                    .code = .getcwd,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(GetCwd).init(.{}),
-            };
-        }
-    }.func;
-}
-
-pub fn chDir(Io: type) OpConstructor(Io, ChDir) {
-    return struct {
-        pub fn func(
-            data: ChDir.Intern,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, ChDir)) callconv(.c) void,
-        ) Op(Io, ChDir) {
-            return .{
-                .header = .{
-                    .code = .chdir,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(ChDir).init(.{}),
-            };
-        }
-    }.func;
-}
-
-pub fn unlinkAt(Io: type) OpConstructor(Io, UnlinkAt) {
-    return struct {
-        pub fn func(
-            data: UnlinkAt.Intern,
-            user_data: ?*anyopaque,
-            callback: *const fn (*Op(Io, UnlinkAt)) callconv(.c) void,
-        ) Op(Io, UnlinkAt) {
-            return .{
-                .header = .{
-                    .code = .unlinkat,
-                    .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
-                },
-                .data = data.toExtern(),
-                .private = Io.OpPrivateData(UnlinkAt).init(.{}),
-            };
-        }
-    }.func;
 }
 
 pub const QueueError = error{SubmissionQueueFull};

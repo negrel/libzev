@@ -1,6 +1,7 @@
 //! Thread pool based implementation of Io.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const posix = std.posix;
 const linux = std.os.linux;
 
@@ -127,13 +128,13 @@ pub fn OpPrivateData(T: type) type {
         }
 
         fn doBlocking(self: *OpPrivateData(T)) void {
+            const op = self.toOp();
             switch (T.op_code) {
                 .noop => {},
                 .timeout => std.Thread.sleep(
                     self.toOp().data.ms * std.time.ns_per_ms,
                 ),
                 .openat => {
-                    const op = self.toOp();
                     const d = &op.data;
                     const dir: std.fs.Dir = .{ .fd = d.dir };
                     var file: std.fs.File.OpenError!std.fs.File = undefined;
@@ -165,12 +166,10 @@ pub fn OpPrivateData(T: type) type {
                     d.file = f.handle;
                 },
                 .close => {
-                    const op = self.toOp();
                     const f: std.fs.File = .{ .handle = op.data.file };
                     f.close();
                 },
                 .pread => {
-                    const op = self.toOp();
                     const d = &op.data;
                     const f: std.fs.File = .{ .handle = d.file };
                     d.read = f.pread(
@@ -182,7 +181,6 @@ pub fn OpPrivateData(T: type) type {
                     };
                 },
                 .pwrite => {
-                    const op = self.toOp();
                     const d = &op.data;
                     const f: std.fs.File = .{ .handle = d.file };
                     d.write = f.pwrite(
@@ -194,14 +192,12 @@ pub fn OpPrivateData(T: type) type {
                     };
                 },
                 .fsync => {
-                    const op = self.toOp();
                     const f: std.fs.File = .{ .handle = op.data.file };
                     f.sync() catch |err| {
                         op.data.err_code = @intFromError(err);
                     };
                 },
                 .stat => {
-                    const op = self.toOp();
                     const f: std.fs.File = .{ .handle = op.data.file };
                     const std_stat = f.stat() catch |err| {
                         op.data.err_code = @intFromError(err);
@@ -210,7 +206,6 @@ pub fn OpPrivateData(T: type) type {
                     op.data.stat = .fromStdFsFileStat(std_stat);
                 },
                 .getcwd => {
-                    const op = self.toOp();
                     const cwd = std.process.getCwd(
                         op.data.buffer[0..op.data.buffer_len],
                     ) catch |err| {
@@ -220,7 +215,6 @@ pub fn OpPrivateData(T: type) type {
                     op.data.cwd_len = cwd.len;
                 },
                 .chdir => {
-                    const op = self.toOp();
                     std.process.changeCurDirZ(
                         op.data.path,
                     ) catch |err| {
@@ -229,7 +223,6 @@ pub fn OpPrivateData(T: type) type {
                     };
                 },
                 .unlinkat => {
-                    const op = self.toOp();
                     const dir: std.fs.Dir = .{ .fd = op.data.dir };
                     if (op.data.remove_dir) {
                         dir.deleteDirZ(op.data.path) catch |err| {
@@ -242,13 +235,84 @@ pub fn OpPrivateData(T: type) type {
                     }
                 },
                 .socket => {
-                    const op = self.toOp();
                     op.data.socket = std.posix.socket(
                         @intFromEnum(op.data.domain),
-                        @intFromEnum(op.data.protocol),
+                        @intFromEnum(op.data.socket_type),
                         @intFromEnum(op.data.protocol),
                     ) catch |err| {
                         op.data.err_code = @intFromError(err);
+                        return;
+                    };
+                },
+                .bind => {
+                    std.posix.bind(
+                        op.data.socket,
+                        op.data.address,
+                        op.data.address_len,
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
+                    };
+                },
+                .listen => {
+                    std.posix.listen(
+                        op.data.socket,
+                        @intCast(op.data.backlog),
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
+                    };
+                },
+                .accept => {
+                    op.data.accepted_socket = std.posix.accept(
+                        op.data.socket,
+                        op.data.address,
+                        op.data.address_len,
+                        op.data.flags,
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
+                        return;
+                    };
+                },
+                .connect => {
+                    std.posix.connect(
+                        op.data.socket,
+                        op.data.address,
+                        op.data.address_len,
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
+                    };
+                },
+                .shutdown => {
+                    std.posix.shutdown(
+                        op.data.socket,
+                        @enumFromInt(@intFromEnum(op.data.how)),
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
+                    };
+                },
+                .closesocket => {
+                    if (builtin.os.tag == .windows)
+                        std.posix.closesocket(op.data.socket)
+                    else
+                        std.posix.close(op.data.socket);
+                },
+                .recv => {
+                    op.data.recv = std.posix.recv(
+                        op.data.socket,
+                        op.data.buffer[0..op.data.buffer_len],
+                        op.data.flags,
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
+                        return;
+                    };
+                },
+                .send => {
+                    op.data.send = std.posix.send(
+                        op.data.socket,
+                        op.data.buffer[0..op.data.buffer_len],
+                        op.data.flags,
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
+                        return;
                     };
                 },
             }
@@ -256,14 +320,23 @@ pub fn OpPrivateData(T: type) type {
     };
 }
 
-pub const noOp = io.noOp(Io);
-pub const timeOut = io.timeOut(Io);
-pub const openAt = io.openAt(Io);
-pub const close = io.close(Io);
-pub const pRead = io.pRead(Io);
-pub const pWrite = io.pWrite(Io);
-pub const fSync = io.fSync(Io);
-pub const stat = io.stat(Io);
-pub const getCwd = io.getCwd(Io);
-pub const chDir = io.chDir(Io);
-pub const unlinkAt = io.unlinkAt(Io);
+pub const noOp = io.opInitOf(Io, io.NoOp);
+pub const timeOut = io.opInitOf(Io, io.TimeOut);
+pub const openAt = io.opInitOf(Io, io.OpenAt);
+pub const close = io.opInitOf(Io, io.Close);
+pub const pRead = io.opInitOf(Io, io.PRead);
+pub const pWrite = io.opInitOf(Io, io.PWrite);
+pub const fSync = io.opInitOf(Io, io.FSync);
+pub const stat = io.opInitOf(Io, io.Stat);
+pub const getCwd = io.opInitOf(Io, io.GetCwd);
+pub const chDir = io.opInitOf(Io, io.ChDir);
+pub const unlinkAt = io.opInitOf(Io, io.UnlinkAt);
+pub const socket = io.opInitOf(Io, io.Socket);
+pub const bind = io.opInitOf(Io, io.Bind);
+pub const listen = io.opInitOf(Io, io.Listen);
+pub const accept = io.opInitOf(Io, io.Accept);
+pub const connect = io.opInitOf(Io, io.Connect);
+pub const shutdown = io.opInitOf(Io, io.Shutdown);
+pub const closeSocket = io.opInitOf(Io, io.CloseSocket);
+pub const recv = io.opInitOf(Io, io.Recv);
+pub const send = io.opInitOf(Io, io.Send);

@@ -63,7 +63,7 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
     switch (op_h.code) {
         .noop => sqe.prep_nop(),
         .timeout => {
-            const timeout_op = Op(io.TimeOut).fromHeaderUnsafe(op_h);
+            const timeout_op = Op(io.TimeOut).fromHeader(op_h);
             timeout_op.private.uring_data = msToTimespec(timeout_op.data.ms);
 
             sqe.prep_timeout(
@@ -73,7 +73,7 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
             );
         },
         .openat => {
-            const openat_op = Op(io.OpenAt).fromHeaderUnsafe(op_h);
+            const openat_op = Op(io.OpenAt).fromHeader(op_h);
             const d = openat_op.data;
             const opts = d.opts;
             var os_flags: posix.O = .{
@@ -97,25 +97,25 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
             );
         },
         .close => {
-            const close_op = Op(io.Close).fromHeaderUnsafe(op_h);
+            const close_op = Op(io.Close).fromHeader(op_h);
             sqe.prep_close(close_op.data.file);
         },
         .pread => {
-            const pread_op = Op(io.PRead).fromHeaderUnsafe(op_h);
+            const pread_op = Op(io.PRead).fromHeader(op_h);
             const d = pread_op.data;
             sqe.prep_read(d.file, d.buffer[0..d.buffer_len], d.offset);
         },
         .pwrite => {
-            const pwrite_op = Op(io.PWrite).fromHeaderUnsafe(op_h);
+            const pwrite_op = Op(io.PWrite).fromHeader(op_h);
             const d = pwrite_op.data;
             sqe.prep_write(d.file, d.buffer[0..d.buffer_len], d.offset);
         },
         .fsync => {
-            const fsync_op = Op(io.FSync).fromHeaderUnsafe(op_h);
+            const fsync_op = Op(io.FSync).fromHeader(op_h);
             sqe.prep_fsync(fsync_op.data.file, 0);
         },
         .stat => {
-            const stat_op = Op(io.Stat).fromHeaderUnsafe(op_h);
+            const stat_op = Op(io.Stat).fromHeader(op_h);
             sqe.prep_statx(
                 stat_op.data.file,
                 "",
@@ -127,7 +127,7 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
         },
         .getcwd, .chdir => unreachable,
         .unlinkat => {
-            const unlinkat_op = Op(io.UnlinkAt).fromHeaderUnsafe(op_h);
+            const unlinkat_op = Op(io.UnlinkAt).fromHeader(op_h);
             sqe.prep_unlinkat(
                 unlinkat_op.data.dir,
                 unlinkat_op.data.path,
@@ -135,12 +135,73 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
             );
         },
         .socket => {
-            const socket_op = Op(io.Socket).fromHeaderUnsafe(op_h);
+            const socket_op = Op(io.Socket).fromHeader(op_h);
             sqe.prep_socket(
                 @intFromEnum(socket_op.data.domain),
-                @intFromEnum(socket_op.data.protocol),
+                @intFromEnum(socket_op.data.socket_type),
                 @intFromEnum(socket_op.data.protocol),
                 0,
+            );
+        },
+        .bind => {
+            const bind_op = Op(io.Bind).fromHeader(op_h);
+            sqe.prep_bind(
+                bind_op.data.socket,
+                bind_op.data.address,
+                bind_op.data.address_len,
+                0,
+            );
+        },
+        .listen => {
+            const listen_op = Op(io.Listen).fromHeader(op_h);
+            sqe.prep_listen(
+                listen_op.data.socket,
+                listen_op.data.backlog,
+                0,
+            );
+        },
+        .accept => {
+            const accept_op = Op(io.Accept).fromHeader(op_h);
+            sqe.prep_accept(
+                accept_op.data.socket,
+                accept_op.data.address,
+                accept_op.data.address_len,
+                0,
+            );
+        },
+        .connect => {
+            const connect_op = Op(io.Connect).fromHeader(op_h);
+            sqe.prep_connect(
+                connect_op.data.socket,
+                connect_op.data.address,
+                connect_op.data.address_len,
+            );
+        },
+        .shutdown => {
+            const shutdown_op = Op(io.Shutdown).fromHeader(op_h);
+            sqe.prep_shutdown(
+                shutdown_op.data.socket,
+                @intFromEnum(shutdown_op.data.how),
+            );
+        },
+        .closesocket => {
+            const closesocket_op = Op(io.CloseSocket).fromHeader(op_h);
+            sqe.prep_close(closesocket_op.data.socket);
+        },
+        .recv => {
+            const recv_op = Op(io.Recv).fromHeader(op_h);
+            sqe.prep_recv(
+                recv_op.data.socket,
+                recv_op.data.buffer[0..recv_op.data.buffer_len],
+                recv_op.data.flags,
+            );
+        },
+        .send => {
+            const send_op = Op(io.Send).fromHeader(op_h);
+            sqe.prep_send(
+                send_op.data.socket,
+                send_op.data.buffer[0..send_op.data.buffer_len],
+                send_op.data.flags,
             );
         },
     }
@@ -196,14 +257,11 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
             switch (op_h.code) {
                 .noop, .timeout => {},
                 .openat => {
-                    const op = Op(io.OpenAt).fromHeaderUnsafe(op_h);
+                    const op = Op(io.OpenAt).fromHeader(op_h);
                     if (cqe.res < 0) {
                         const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
-                            .INTR => unreachable,
-                            .FAULT => unreachable,
                             .INVAL => error.BadPathName,
-                            .BADF => unreachable,
                             .ACCES => error.AccessDenied,
                             .FBIG => error.FileTooBig,
                             .OVERFLOW => error.FileTooBig,
@@ -237,13 +295,10 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                 },
                 .close => {},
                 .pread => {
-                    const op = Op(io.PRead).fromHeaderUnsafe(op_h);
+                    const op = Op(io.PRead).fromHeader(op_h);
                     if (cqe.res < 0) {
                         const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
-                            .INTR => unreachable,
-                            .INVAL => unreachable,
-                            .FAULT => unreachable,
                             .SRCH => error.ProcessNotFound,
                             .AGAIN => error.WouldBlock,
                             .CANCELED => error.Canceled,
@@ -263,19 +318,16 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                     }
                 },
                 .pwrite => {
-                    const op = Op(io.PWrite).fromHeaderUnsafe(op_h);
+                    const op = Op(io.PWrite).fromHeader(op_h);
                     if (cqe.res < 0) {
                         const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
-                            .INTR => unreachable,
                             .INVAL => error.InvalidArgument,
-                            .FAULT => unreachable,
                             .SRCH => error.ProcessNotFound,
                             .AGAIN => error.WouldBlock,
                             // can be a race condition.
                             .BADF => error.NotOpenForWriting,
                             // `connect` was never called.
-                            .DESTADDRREQ => unreachable,
                             .DQUOT => error.DiskQuota,
                             .FBIG => error.FileTooBig,
                             .IO => error.InputOutput,
@@ -295,11 +347,10 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                     }
                 },
                 .fsync => {
-                    const op = Op(io.PWrite).fromHeaderUnsafe(op_h);
+                    const op = Op(io.FSync).fromHeader(op_h);
                     if (cqe.res < 0) {
                         const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
-                            .BADF, .INVAL, .ROFS => unreachable,
                             .IO => error.InputOutput,
                             .NOSPC => error.NoSpaceLeft,
                             .DQUOT => error.DiskQuota,
@@ -308,19 +359,11 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                     }
                 },
                 .stat => {
-                    const op = Op(io.Stat).fromHeaderUnsafe(op_h);
+                    const op = Op(io.Stat).fromHeader(op_h);
                     if (cqe.res < 0) {
                         const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
-                            .ACCES => unreachable,
-                            .BADF => unreachable,
-                            .FAULT => unreachable,
-                            .INVAL => unreachable,
-                            .LOOP => unreachable,
-                            .NAMETOOLONG => unreachable,
-                            .NOENT => unreachable,
                             .NOMEM => error.SystemResources,
-                            .NOTDIR => unreachable,
                             else => |err| posix.unexpectedErrno(err),
                         });
                     } else {
@@ -332,14 +375,13 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                 },
                 .getcwd, .chdir => unreachable,
                 .unlinkat => {
-                    const op = Op(io.UnlinkAt).fromHeaderUnsafe(op_h);
+                    const op = Op(io.UnlinkAt).fromHeader(op_h);
                     if (cqe.res < 0) {
                         const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
                             .ACCES => error.AccessDenied,
                             .PERM => error.PermissionDenied,
                             .BUSY => error.FileBusy,
-                            .FAULT => unreachable,
                             .IO => error.FileSystem,
                             .ISDIR => error.IsDir,
                             .LOOP => error.SymLinkLoop,
@@ -357,17 +399,12 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                                 error.InvalidUtf8
                             else
                                 posix.unexpectedErrno(err),
-                            // invalid flags, or pathname has '.' as last
-                            // component
-                            .INVAL => unreachable,
-                            // always a race condition
-                            .BADF => unreachable,
                             else => |err| posix.unexpectedErrno(err),
                         });
                     }
                 },
                 .socket => {
-                    const op = Op(io.UnlinkAt).fromHeaderUnsafe(op_h);
+                    const op = Op(io.Socket).fromHeader(op_h);
                     if (cqe.res < 0) {
                         const rc = errno(cqe.res);
                         op.data.err_code = @intFromError(switch (rc) {
@@ -382,7 +419,138 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                             .PROTOTYPE => error.SocketTypeNotSupported,
                             else => |err| posix.unexpectedErrno(err),
                         });
+                    } else {
+                        op.data.socket = cqe.res;
                     }
+                },
+                .bind => {
+                    const op = Op(io.Bind).fromHeader(op_h);
+                    if (cqe.res < 0) {
+                        const rc = errno(cqe.res);
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .ACCES, .PERM => error.AccessDenied,
+                            .ADDRINUSE => error.AddressInUse,
+                            .AFNOSUPPORT => error.AddressFamilyNotSupported,
+                            .ADDRNOTAVAIL => error.AddressNotAvailable,
+                            .LOOP => error.SymLinkLoop,
+                            .NAMETOOLONG => error.NameTooLong,
+                            .NOENT => error.FileNotFound,
+                            .NOMEM => error.SystemResources,
+                            .NOTDIR => error.NotDir,
+                            .ROFS => error.ReadOnlyFileSystem,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    }
+                },
+                .listen => {
+                    const op = Op(io.Listen).fromHeader(op_h);
+                    if (cqe.res < 0) {
+                        const rc = errno(cqe.res);
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .ADDRINUSE => error.AddressInUse,
+                            .NOTSOCK => error.FileDescriptorNotASocket,
+                            .OPNOTSUPP => error.OperationNotSupported,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    }
+                },
+                .accept => {
+                    const op = Op(io.Accept).fromHeader(op_h);
+                    if (cqe.res < 0) {
+                        const rc = errno(cqe.res);
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .AGAIN => error.WouldBlock,
+                            .CONNABORTED => error.ConnectionAborted,
+                            .INVAL => error.SocketNotListening,
+                            .MFILE => error.ProcessFdQuotaExceeded,
+                            .NFILE => error.SystemFdQuotaExceeded,
+                            .NOBUFS => error.SystemResources,
+                            .NOMEM => error.SystemResources,
+                            .PROTO => error.ProtocolFailure,
+                            .PERM => error.BlockedByFirewall,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    } else {
+                        op.data.accepted_socket = @intCast(cqe.res);
+                    }
+                },
+                .connect => {
+                    const op = Op(io.Connect).fromHeader(op_h);
+                    if (cqe.res < 0) {
+                        const rc = errno(cqe.res);
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .ACCES => error.AccessDenied,
+                            .PERM => error.PermissionDenied,
+                            .ADDRINUSE => error.AddressInUse,
+                            .ADDRNOTAVAIL => error.AddressNotAvailable,
+                            .AFNOSUPPORT => error.AddressFamilyNotSupported,
+                            .AGAIN, .INPROGRESS => error.WouldBlock,
+                            .ALREADY => error.ConnectionPending,
+                            .CONNREFUSED => error.ConnectionRefused,
+                            .CONNRESET => error.ConnectionResetByPeer,
+                            .HOSTUNREACH => error.NetworkUnreachable,
+                            .NETUNREACH => error.NetworkUnreachable,
+                            .TIMEDOUT => error.ConnectionTimedOut,
+                            // Returned when socket is AF.UNIX and the given
+                            // path does not exist.
+                            .NOENT => error.FileNotFound,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    }
+                },
+                .shutdown => {
+                    const op = Op(io.Shutdown).fromHeader(op_h);
+                    if (cqe.res < 0) {
+                        const rc = errno(cqe.res);
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .NOTCONN => return error.SocketNotConnected,
+                            .NOBUFS => return error.SystemResources,
+                            else => |err| return posix.unexpectedErrno(err),
+                        });
+                    }
+                },
+                .closesocket => {},
+                .recv => {
+                    const op = Op(io.Recv).fromHeader(op_h);
+                    if (cqe.res < 0) {
+                        const rc = errno(cqe.res);
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .NOTCONN => error.SocketNotConnected,
+                            .AGAIN => error.WouldBlock,
+                            .NOMEM => error.SystemResources,
+                            .CONNREFUSED => error.ConnectionRefused,
+                            .CONNRESET => error.ConnectionResetByPeer,
+                            .TIMEDOUT => error.ConnectionTimedOut,
+                            else => |err| posix.unexpectedErrno(err),
+                        });
+                    } else op.data.recv = @intCast(cqe.res);
+                },
+                .send => {
+                    const op = Op(io.Send).fromHeader(op_h);
+                    if (cqe.res < 0) {
+                        const rc = errno(cqe.res);
+                        op.data.err_code = @intFromError(switch (rc) {
+                            .ACCES => error.AccessDenied,
+                            .AGAIN => error.WouldBlock,
+                            .ALREADY => error.FastOpenAlreadyInProgress,
+                            .CONNREFUSED => error.ConnectionRefused,
+                            .CONNRESET => error.ConnectionResetByPeer,
+                            // connection-mode socket was connected already but
+                            // a recipient was specified
+                            .MSGSIZE => error.MessageTooBig,
+                            .NOBUFS => error.SystemResources,
+                            .NOMEM => error.SystemResources,
+                            // Some bit in the flags argument is inappropriate
+                            // for the socket type.
+                            .PIPE => error.BrokenPipe,
+                            .LOOP => error.SymLinkLoop,
+                            .NOENT => error.FileNotFound,
+                            .NOTDIR => error.NotDir,
+                            .NOTCONN => error.SocketNotConnected,
+                            .NETDOWN => error.NetworkSubsystemFailed,
+                            else => |err| return posix.unexpectedErrno(err),
+                        });
+                    } else op.data.send = @intCast(cqe.res);
                 },
             }
 
@@ -455,14 +623,23 @@ pub fn OpPrivateData(T: type) type {
     };
 }
 
-pub const noOp = io.noOp(Io);
-pub const timeOut = io.timeOut(Io);
-pub const openAt = io.openAt(Io);
-pub const close = io.close(Io);
-pub const pRead = io.pRead(Io);
-pub const pWrite = io.pWrite(Io);
-pub const fSync = io.fSync(Io);
-pub const stat = io.stat(Io);
-pub const getCwd = io.getCwd(Io);
-pub const chDir = io.chDir(Io);
-pub const unlinkAt = io.unlinkAt(Io);
+pub const noOp = io.opInitOf(Io, io.NoOp);
+pub const timeOut = io.opInitOf(Io, io.TimeOut);
+pub const openAt = io.opInitOf(Io, io.OpenAt);
+pub const close = io.opInitOf(Io, io.Close);
+pub const pRead = io.opInitOf(Io, io.PRead);
+pub const pWrite = io.opInitOf(Io, io.PWrite);
+pub const fSync = io.opInitOf(Io, io.FSync);
+pub const stat = io.opInitOf(Io, io.Stat);
+pub const getCwd = io.opInitOf(Io, io.GetCwd);
+pub const chDir = io.opInitOf(Io, io.ChDir);
+pub const unlinkAt = io.opInitOf(Io, io.UnlinkAt);
+pub const socket = io.opInitOf(Io, io.Socket);
+pub const bind = io.opInitOf(Io, io.Bind);
+pub const listen = io.opInitOf(Io, io.Listen);
+pub const accept = io.opInitOf(Io, io.Accept);
+pub const connect = io.opInitOf(Io, io.Connect);
+pub const shutdown = io.opInitOf(Io, io.Shutdown);
+pub const closeSocket = io.opInitOf(Io, io.CloseSocket);
+pub const recv = io.opInitOf(Io, io.Recv);
+pub const send = io.opInitOf(Io, io.Send);

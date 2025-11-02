@@ -21,5 +21,14 @@ pub const Stat = io.Stat;
 pub const GetCwd = io.GetCwd;
 pub const ChDir = io.ChDir;
 pub const UnlinkAt = io.UnlinkAt;
+pub const Socket = io.Socket;
+pub const Bind = io.Bind;
+pub const Listen = io.Listen;
+pub const Accept = io.Accept;
+pub const Connect = io.Connect;
+pub const Shutdown = io.Shutdown;
+pub const CloseSocket = io.CloseSocket;
+pub const Recv = io.Recv;
+pub const Send = io.Send;
 
 pub const FileStat = io.FileStat;
