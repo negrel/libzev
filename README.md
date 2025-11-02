@@ -1,21 +1,19 @@
 # `libzev` - Cross platform event loop.
 
-`libzev` is a cross platform event loop inspired by `io_uring`. It works using
-2 fixed size ring buffers, one to submit I/O operations and one to retrieve
-I/O completions.
+`libzev` is a low level cross platform event loop inspired by `io_uring`.
 
 It works as follow:
-* You prepare I/O operations by adding them to the submission queue (SQ)
-* You submit the SQ
-* You wait for I/O completions to be added to the completion queue (CQ)
-* You process the results
+* You queue I/O operations
+* You submit I/O operations in submission queue (SQ)
+* You poll for completed operations in completion queue (CQ) and callbacks are
+executed
 
 ```
                              libzev                             
           +-----------------------------------------+           
-         add                                     consume        
+        queue                                     poll          
          I/O                                       I/O          
-      operation         submit then poll        completion      
+      operation              submit             completion      
 +-----+   |    +----+        +----+        +----+   |    +-----+
 | App +---|--->| SQ +------->| Io +------->| CQ +---|--->| App |
 +-----+   |    +----+        +----+        +----+   |    +-----+
