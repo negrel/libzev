@@ -77,6 +77,7 @@ test "batch of timeout" {
                     called += 1;
                 }
             };
+            Static.called = 0;
 
             var io: Io = .{};
             try io.init(.{});
@@ -111,6 +112,8 @@ test "openat/pread/close" {
                     read = iop.data.result();
                 }
             };
+            Static.preadCalled = false;
+            Static.read = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -179,6 +182,12 @@ test "openat/pwrite/fsync/close/unlinkat" {
                     unlinkAt = iop.data.result();
                 }
             };
+            Static.pwriteCalled = false;
+            Static.fsyncCalled = false;
+            Static.unlinkAtCalled = false;
+            Static.write = undefined;
+            Static.fsync = undefined;
+            Static.unlinkAt = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -274,6 +283,8 @@ test "openat/stat/close" {
                     stat = iop.data.result();
                 }
             };
+            Static.statCalled = false;
+            Static.stat = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -322,6 +333,8 @@ test "getcwd" {
                     cwd = iop.data.result();
                 }
             };
+            Static.callbackCalled = false;
+            Static.cwd = undefined;
 
             var allocator = std.heap.smp_allocator;
             var io: Io = .{};
@@ -361,6 +374,8 @@ test "chdir" {
                     result = iop.data.result();
                 }
             };
+            Static.callbackCalled = false;
+            Static.result = undefined;
 
             var initial_cwd_buf: [std.posix.PATH_MAX]u8 = undefined;
             const initial_cwd = try std.process.getCwd(initial_cwd_buf[0..]);
@@ -391,14 +406,14 @@ test "socket/bind/listen/accept/recv/send/shutdown/closesocket" {
     try forEachAvailableImpl(struct {
         fn tcase(Io: type) !void {
             const Static = struct {
-                var socketCalled = false;
-                var bindCalled = false;
-                var listenCalled = false;
-                var acceptCalled = false;
-                var recvCalled = false;
-                var sendCalled = false;
-                var shutdownCalled = false;
-                var closeSocketCalled = false;
+                var socketCalled: bool = undefined;
+                var bindCalled: bool = undefined;
+                var listenCalled: bool = undefined;
+                var acceptCalled: bool = undefined;
+                var recvCalled: bool = undefined;
+                var sendCalled: bool = undefined;
+                var shutdownCalled: bool = undefined;
+                var closeSocketCalled: bool = undefined;
                 var socket: zev.Socket.Error!std.posix.socket_t = undefined;
                 var bind: zev.Bind.Error!void = undefined;
                 var listen: zev.Listen.Error!void = undefined;
@@ -499,6 +514,21 @@ test "socket/bind/listen/accept/recv/send/shutdown/closesocket" {
                     stream.close();
                 }
             };
+            Static.socketCalled = false;
+            Static.bindCalled = false;
+            Static.listenCalled = false;
+            Static.acceptCalled = false;
+            Static.recvCalled = false;
+            Static.sendCalled = false;
+            Static.shutdownCalled = false;
+            Static.closeSocketCalled = false;
+            Static.socket = undefined;
+            Static.bind = undefined;
+            Static.listen = undefined;
+            Static.accept = undefined;
+            Static.recv = undefined;
+            Static.send = undefined;
+            Static.shutdown = undefined;
 
             var io: Io = .{};
             try io.init(.{});
@@ -661,12 +691,12 @@ test "socket/connect/send/recv/shutdown/closesocket" {
     try forEachAvailableImpl(struct {
         fn tcase(Io: type) !void {
             const Static = struct {
-                var socketCalled = false;
-                var connectCalled = false;
-                var sendCalled = false;
-                var recvCalled = false;
-                var shutdownCalled = false;
-                var closeSocketCalled = false;
+                var socketCalled: bool = undefined;
+                var connectCalled: bool = undefined;
+                var sendCalled: bool = undefined;
+                var recvCalled: bool = undefined;
+                var shutdownCalled: bool = undefined;
+                var closeSocketCalled: bool = undefined;
                 var socket: zev.Socket.Error!std.posix.socket_t = undefined;
                 var connect: zev.Connect.Error!void = undefined;
                 var listen: zev.Listen.Error!void = undefined;
@@ -742,6 +772,19 @@ test "socket/connect/send/recv/shutdown/closesocket" {
                     srv.deinit();
                 }
             };
+            Static.socketCalled = false;
+            Static.connectCalled = false;
+            Static.sendCalled = false;
+            Static.recvCalled = false;
+            Static.shutdownCalled = false;
+            Static.closeSocketCalled = false;
+            Static.socket = undefined;
+            Static.connect = undefined;
+            Static.listen = undefined;
+            Static.accept = undefined;
+            Static.send = undefined;
+            Static.recv = undefined;
+            Static.shutdown = undefined;
 
             var io: Io = .{};
             try io.init(.{});
