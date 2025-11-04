@@ -4,6 +4,8 @@
 const std = @import("std");
 const fs = std.fs;
 
+const posix = @import("./posix.zig");
+
 pub const OpCode = enum(c_int) {
     noop,
     timeout,
@@ -95,10 +97,31 @@ pub const NoOp = extern struct {
     pub const op_code = OpCode.noop;
 };
 
+/// TimeOut operation complete after `sec` seconds and `nsec` nanoseconds has
+/// passed. The value of nanoseconds MUST be in the range of [0, 999999999].
+///
+/// Windows:
+/// Time precision is limited to milliseconds. `remaining_sec` and
+/// `remaining_nsec` is not used.
+///
+/// Linux:
+/// If timer is interrupted, `remaining_sec` and `remaining_sec` can be used to
+/// setup another TimeOut operation and complete the specified pause.
 pub const TimeOut = extern struct {
     pub const op_code = OpCode.timeout;
 
-    ms: u64,
+    pub const Error = (error.Cancelled || posix.NanoSleepError);
+
+    sec: usize,
+    nsec: usize,
+
+    remaining_sec: usize = 0,
+    remaining_nsec: usize = 0,
+    err_code: u16 = 0,
+
+    pub fn result(self: *OpenAt) Error!void {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+    }
 };
 
 pub const OpenAt = extern struct {

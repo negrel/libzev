@@ -86,7 +86,10 @@ test "batch of timeout" {
             var timeouts: [16]Io.Op(zev.TimeOut) = undefined;
 
             for (0..timeouts.len) |i| {
-                timeouts[i] = Io.timeOut(.{ .ms = i % 5 }, null, &Static.callback);
+                timeouts[i] = Io.timeOut(.{
+                    .sec = 0,
+                    .nsec = (i * std.time.ns_per_ms) % 5,
+                }, null, &Static.callback);
                 try testutils.queue(&io, &timeouts[i], i + 1);
             }
             try testutils.submit(&io, timeouts.len);

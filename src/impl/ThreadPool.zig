@@ -2,12 +2,12 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const posix = std.posix;
 const linux = std.os.linux;
 
 const io = @import("../io.zig");
 const queue_mpsc = @import("../queue_mpsc.zig");
 const ThreadPool = @import("../ThreadPool.zig");
+const posix = @import("../posix.zig");
 
 const Io = @This();
 
@@ -136,9 +136,27 @@ pub fn OpPrivateData(T: type) type {
             const op = self.toOp();
             switch (T.op_code) {
                 .noop => {},
-                .timeout => std.Thread.sleep(
-                    self.toOp().data.ms * std.time.ns_per_ms,
-                ),
+                .timeout => {
+                    if (builtin.os.tag == .windows) {
+                        std.Thread.sleep(
+                            self.toOp().data.ms * std.time.ns_per_ms,
+                        );
+                    } else {
+                        const req: posix.timespec = .{
+                            .sec = std.math.cast(isize, op.data.sec) orelse
+                                std.math.maxInt(isize),
+                            .nsec = std.math.cast(isize, op.data.nsec) orelse
+                                std.time.ns_per_s - 1,
+                        };
+                        var rem: posix.timespec = .{ .sec = 0, .nsec = 0 };
+                        posix.nanosleep(req, &rem) catch |err| {
+                            op.data.err_code = @intFromError(err);
+                            return;
+                        };
+                        op.data.remaining_sec = @intCast(rem.sec);
+                        op.data.remaining_nsec = @intCast(rem.nsec);
+                    }
+                },
                 .openat => {
                     const d = &op.data;
                     const dir: std.fs.Dir = .{ .fd = d.dir };

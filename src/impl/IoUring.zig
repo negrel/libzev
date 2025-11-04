@@ -2,9 +2,9 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const posix = std.posix;
 const linux = std.os.linux;
 
+const posix = @import("../posix.zig");
 const io = @import("../io.zig");
 const ThreadPool = @import("./ThreadPool.zig");
 
@@ -64,12 +64,17 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
         .noop => sqe.prep_nop(),
         .timeout => {
             const timeout_op = Op(io.TimeOut).fromHeader(op_h);
-            timeout_op.private.uring_data = msToTimespec(timeout_op.data.ms);
+            timeout_op.private.uring_data = .{
+                .sec = std.math.cast(isize, timeout_op.data.sec) orelse
+                    std.math.maxInt(isize),
+                .nsec = std.math.cast(isize, timeout_op.data.nsec) orelse
+                    std.time.ns_per_s - 1,
+            };
 
             sqe.prep_timeout(
                 &timeout_op.private.uring_data,
                 1,
-                linux.IORING_TIMEOUT_ABS,
+                linux.IORING_TIMEOUT_ABS | linux.IORING_TIMEOUT_ETIME_SUCCESS,
             );
         },
         .openat => {
@@ -282,7 +287,20 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
 fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
     const op_h: *io.OpHeader = @ptrFromInt(cqe.user_data);
     switch (op_h.code) {
-        .noop, .timeout => {},
+        .noop => {},
+        .timeout => {
+            const op = Op(io.TimeOut).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                if (rc != .TIME)
+                    op.data.err_code = @intFromError(switch (rc) {
+                        .FAULT => posix.NanoSleepError.BadAddress,
+                        .INVAL => posix.NanoSleepError.InvalidSyscallParameters,
+                        .INTR => posix.NanoSleepError.SignalInterrupt,
+                        else => |err| posix.unexpectedErrno(err),
+                    });
+            }
+        },
         .openat => {
             const op = Op(io.OpenAt).fromHeader(op_h);
             if (cqe.res < 0) {
@@ -599,26 +617,6 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
 
 fn errno(err_code: i32) linux.E {
     return posix.errno(@as(isize, @intCast(err_code)));
-}
-
-fn msToTimespec(ms: u64) linux.kernel_timespec {
-    const max: linux.kernel_timespec = .{
-        .sec = std.math.maxInt(isize),
-        .nsec = std.math.maxInt(isize),
-    };
-    const next_s = std.math.cast(isize, ms / std.time.ms_per_s) orelse
-        return max;
-    const next_ns = std.math.cast(
-        isize,
-        (ms % std.time.ms_per_s) * std.time.ns_per_ms,
-    ) orelse return max;
-
-    const now = posix.clock_gettime(posix.CLOCK.MONOTONIC) catch unreachable;
-
-    return .{
-        .sec = std.math.add(isize, now.sec, next_s) catch return max,
-        .nsec = std.math.add(isize, now.nsec, next_ns) catch return max,
-    };
 }
 
 pub const Options = struct {
