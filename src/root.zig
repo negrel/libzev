@@ -29,6 +29,8 @@ pub const Shutdown = io.Shutdown;
 pub const CloseSocket = io.CloseSocket;
 pub const Recv = io.Recv;
 pub const Send = io.Send;
+pub const Spawn = io.Spawn;
+pub const WaitPid = io.WaitPid;
 
 pub const OpCode = io.OpCode;
 pub const PollMode = io.PollMode;

@@ -911,6 +911,78 @@ test "socket/connect/send/recv/shutdown/closesocket" {
     }.tcase);
 }
 
+test "spawn/wait" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) !void {
+            const Static = struct {
+                var spawnCalled: bool = undefined;
+                var waitPidCalled: bool = undefined;
+                var spawn: zev.Spawn.Error!std.posix.pid_t = undefined;
+                var waitPid: zev.WaitPid.Error!u32 = undefined;
+
+                fn spawnCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Spawn),
+                ) callconv(.c) void {
+                    spawn = op.data.result();
+                    spawnCalled = true;
+                }
+
+                fn waitPidCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.WaitPid),
+                ) callconv(.c) void {
+                    waitPid = op.data.result();
+                    waitPidCalled = true;
+                }
+            };
+            Static.spawnCalled = false;
+            Static.waitPidCalled = false;
+            Static.spawn = undefined;
+            Static.waitPid = undefined;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            // Spawn.
+            {
+                var spawn = Io.spawn(.{
+                    .args = &.{ "ls", null },
+                    .env_vars = &.{null},
+                    .stdin = .ignore,
+                    .stdout = .ignore,
+                    .stderr = .ignore,
+                }, null, Static.spawnCallback);
+
+                try testutils.queue(&io, &spawn, 1);
+                try testutils.submit(&io, 1);
+                _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
+
+                try std.testing.expect(Static.spawnCalled);
+            }
+
+            const pid = try Static.spawn;
+
+            // Wait pid.
+            {
+                var waitpid = Io.waitPid(.{
+                    .pid = pid,
+                }, null, Static.waitPidCallback);
+
+                try testutils.queue(&io, &waitpid, 1);
+                try testutils.submit(&io, 1);
+                _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
+
+                try std.testing.expect(Static.waitPidCalled);
+
+                const status = Static.waitPid;
+                try std.testing.expectEqual(0, status);
+            }
+        }
+    }.tcase);
+}
+
 const testutils = struct {
     fn Deref(T: type) type {
         return @typeInfo(T).pointer.child;

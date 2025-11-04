@@ -25,6 +25,8 @@ pub const OpCode = enum(c_int) {
     closesocket,
     recv,
     send,
+    spawn,
+    waitpid,
 
     pub fn Data(self: @This()) type {
         return switch (self) {
@@ -48,6 +50,8 @@ pub const OpCode = enum(c_int) {
             .closesocket => CloseSocket,
             .recv => Recv,
             .send => Send,
+            .spawn => Spawn,
+            .waitpid => WaitPid,
         };
     }
 };
@@ -605,6 +609,78 @@ pub const Send = extern struct {
     pub fn result(self: *Send) Error!usize {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
         return self.send;
+    }
+};
+
+pub const Spawn = extern struct {
+    pub const op_code = OpCode.spawn;
+
+    pub const Error = std.process.Child.SpawnError;
+
+    pub const StdIo = enum(c_int) {
+        /// Inherit the stream from the parent process.
+        inherit,
+        /// Pass a null stream to the child process. This is /dev/null on POSIX
+        /// and NUL on Windows.
+        ignore,
+        /// Create a pipe for the stream. The corresponding field (stdout,
+        /// stderr, or stdin) will be assigned a File object that can be used to
+        /// read from or write to the pipe.
+        pipe,
+        /// Close the stream after the child process spawns.
+        close,
+    };
+
+    pub const Intern = struct {
+        args: [*:null]const ?[*:0]const u8,
+        env_vars: [*:null]const ?[*:0]const u8,
+        stdin: StdIo,
+        stdout: StdIo,
+        stderr: StdIo,
+
+        pub fn toExtern(self: Intern) Spawn {
+            return .{
+                .args = self.args,
+                .env_vars = self.env_vars,
+                .stdio = .{ self.stdin, self.stdout, self.stderr },
+            };
+        }
+    };
+
+    args: [*c]const [*c]const u8,
+    env_vars: [*c]const [*c]const u8,
+    stdio: [3]StdIo,
+
+    pid: std.posix.pid_t = undefined,
+    stdin: std.posix.pid_t = undefined,
+    stdout: std.posix.pid_t = undefined,
+    stderr: std.posix.pid_t = undefined,
+    err_code: u16 = 0,
+
+    pub fn result(self: *Spawn) Error!std.posix.pid_t {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+        return self.pid;
+    }
+};
+
+pub const WaitPid = extern struct {
+    pub const op_code = OpCode.waitpid;
+
+    pub const Error = error{
+        // Process does not have any unwaited-for children.
+        NoChild,
+        SignalInterrupt,
+        InvalidSyscallParameters,
+    };
+
+    pid: std.posix.pid_t,
+
+    status: u32 = 0,
+    err_code: u16 = 0,
+
+    pub fn result(self: *WaitPid) Error!u32 {
+        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
+        return self.status;
     }
 };
 

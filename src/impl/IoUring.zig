@@ -34,17 +34,17 @@ pub fn deinit(self: *Io) void {
 }
 
 pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
-    std.debug.assert(@typeInfo(@TypeOf(op)) == .pointer);
+    comptime {
+        std.debug.assert(@typeInfo(@TypeOf(op)) == .pointer);
+        std.debug.assert(!@typeInfo(@TypeOf(op)).pointer.is_const);
+    }
 
     if (self.tpool.batch.len + self.sqe_len + 1 == std.math.maxInt(u32)) {
         return io.QueueError.SubmissionQueueFull;
     }
 
     switch (op.header.code) {
-        .getcwd => {
-            _ = try self.tpool.queue(op);
-        },
-        .chdir => {
+        .getcwd, .chdir, .spawn => {
             _ = try self.tpool.queue(op);
         },
         else => {
@@ -202,6 +202,17 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
                 send_op.data.socket,
                 send_op.data.buffer[0..send_op.data.buffer_len],
                 send_op.data.flags,
+            );
+        },
+        .spawn => unreachable,
+        .waitpid => {
+            const waitpid_op = Op(io.WaitPid).fromHeader(op_h);
+            sqe.prep_waitid(
+                linux.P.PID,
+                waitpid_op.data.pid,
+                &waitpid_op.private.uring_data,
+                linux.W.EXITED,
+                0,
             );
         },
     }
@@ -568,6 +579,19 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
                 });
             } else op.data.send = @intCast(cqe.res);
         },
+        .spawn => unreachable,
+        .waitpid => {
+            const op = Op(io.WaitPid).fromHeader(op_h);
+            if (cqe.res < 0) {
+                const rc = errno(cqe.res);
+                op.data.err_code = @intFromError(switch (rc) {
+                    .CHILD => error.NoChild,
+                    .INTR => error.SignalInterrupt,
+                    .INVAL => error.InvalidSyscallParameters,
+                    else => |err| posix.unexpectedErrno(err),
+                });
+            }
+        },
     }
 
     op_h.callback(self, op_h);
@@ -617,6 +641,10 @@ pub fn OpPrivateData(T: type) type {
         return ThreadPool.OpPrivateData(T);
     } else if (T == io.ChDir) {
         return ThreadPool.OpPrivateData(T);
+    } else if (T == io.Spawn) {
+        return ThreadPool.OpPrivateData(T);
+    } else if (T == io.WaitPid) T: {
+        break :T linux.siginfo_t;
     } else void;
 
     return extern struct {
@@ -650,3 +678,5 @@ pub const shutdown = io.opInitOf(Io, io.Shutdown);
 pub const closeSocket = io.opInitOf(Io, io.CloseSocket);
 pub const recv = io.opInitOf(Io, io.Recv);
 pub const send = io.opInitOf(Io, io.Send);
+pub const spawn = io.opInitOf(Io, io.Spawn);
+pub const waitPid = io.opInitOf(Io, io.WaitPid);
