@@ -80,25 +80,11 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
         .openat => {
             const openat_op = Op(io.OpenAt).fromHeader(op_h);
             const d = openat_op.data;
-            const opts = d.opts;
-            var os_flags: posix.O = .{
-                .CLOEXEC = true,
-                .APPEND = opts.append,
-                .TRUNC = opts.truncate,
-                .CREAT = opts.create or opts.create_new,
-                .EXCL = opts.create_new,
-                .ACCMODE = .RDONLY,
-            };
-            if (opts.write) {
-                if (opts.read) os_flags.ACCMODE = .RDWR else {
-                    os_flags.ACCMODE = .WRONLY;
-                }
-            }
             sqe.prep_openat(
                 d.dir,
                 d.path,
-                os_flags,
-                d.permissions,
+                d.flags,
+                d.mode,
             );
         },
         .close => {
@@ -335,7 +321,7 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
                     else => |err| posix.unexpectedErrno(err),
                 });
             } else {
-                op.data.file = cqe.res;
+                op.data.fd = cqe.res;
             }
         },
         .close => {},

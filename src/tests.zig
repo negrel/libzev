@@ -127,7 +127,8 @@ test "openat/pread/close" {
                 .{
                     .dir = std.fs.cwd(),
                     .path = "./src/testdata/file.txt",
-                    .opts = .{ .read = true },
+                    .flags = .{ .ACCMODE = .RDONLY },
+                    .mode = 0,
                 },
             );
 
@@ -203,12 +204,12 @@ test "openat/pwrite/fsync/close/unlinkat" {
                 .{
                     .dir = tmpDir.dir,
                     .path = "file.txt",
-                    .opts = .{
-                        .read = true,
-                        .write = true,
-                        .create = true,
-                        .truncate = true,
+                    .flags = .{
+                        .ACCMODE = .RDWR,
+                        .CREAT = true,
+                        .TRUNC = true,
                     },
+                    .mode = 0o666,
                 },
             );
 
@@ -297,7 +298,8 @@ test "openat/stat/close" {
             const f = try testutils.openAt(&io, .{
                 .dir = std.fs.cwd(),
                 .path = "./src/testdata/file.txt",
-                .opts = .{ .read = true },
+                .flags = .{ .ACCMODE = .RDONLY },
+                .mode = 0,
             });
 
             // Stat.

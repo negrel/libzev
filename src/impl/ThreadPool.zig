@@ -158,35 +158,16 @@ pub fn OpPrivateData(T: type) type {
                     }
                 },
                 .openat => {
-                    const d = &op.data;
-                    const dir: std.fs.Dir = .{ .fd = d.dir };
-                    var file: std.fs.File.OpenError!std.fs.File = undefined;
-
-                    if (d.opts.create or d.opts.create_new) {
-                        file = dir.createFileZ(d.path, .{
-                            .read = d.opts.read,
-                            .truncate = d.opts.truncate,
-                            .exclusive = d.opts.create_new,
-                            .mode = d.permissions,
-                        });
-                    } else {
-                        var mode: std.fs.File.OpenMode = .read_only;
-                        if (d.opts.write) {
-                            if (d.opts.read) {
-                                mode = .read_write;
-                            } else {
-                                mode = .write_only;
-                            }
-                        }
-                        file = dir.openFileZ(d.path, .{
-                            .mode = mode,
-                        });
-                    }
-                    const f = file catch |err| {
-                        d.err_code = @intFromError(err);
+                    const fd = posix.openatZ(
+                        op.data.dir,
+                        op.data.path,
+                        op.data.flags,
+                        op.data.mode,
+                    ) catch |err| {
+                        op.data.err_code = @intFromError(err);
                         return;
                     };
-                    d.file = f.handle;
+                    op.data.fd = fd;
                 },
                 .close => {
                     const f: std.fs.File = .{ .handle = op.data.file };
@@ -429,7 +410,7 @@ pub fn posixSpawn(data: *io.Spawn) anyerror!std.posix.pid_t {
                 .inherit => {},
                 .ignore => {
                     if (ignore_fd == null) {
-                        ignore_fd = posix.openZ(
+                        ignore_fd = std.posix.openZ(
                             "/dev/null",
                             .{ .ACCMODE = .RDWR },
                             0,

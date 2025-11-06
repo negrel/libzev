@@ -132,39 +132,30 @@ pub const OpenAt = extern struct {
     pub const Intern = struct {
         dir: fs.Dir,
         path: [:0]const u8,
-        opts: Options,
-        permissions: u32 = 0o0666,
+        flags: posix.O,
+        mode: u32,
 
         fn toExtern(self: Intern) OpenAt {
             return .{
                 .dir = self.dir.fd,
                 .path = self.path.ptr,
-                .opts = self.opts,
-                .permissions = self.permissions,
+                .flags = self.flags,
+                .mode = self.mode,
             };
         }
     };
 
-    pub const Options = extern struct {
-        read: bool = true,
-        write: bool = false,
-        append: bool = false,
-        truncate: bool = false,
-        create_new: bool = false,
-        create: bool = true,
-    };
-
     dir: fs.File.Handle,
     path: [*c]const u8,
-    opts: Options,
-    permissions: u32 = 0o0666,
+    flags: posix.O,
+    mode: u32,
 
-    file: fs.File.Handle = -1,
+    fd: fs.File.Handle = -1,
     err_code: u16 = 0,
 
     pub fn result(self: *OpenAt) Error!fs.File {
         if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return .{ .handle = self.file };
+        return .{ .handle = self.fd };
     }
 };
 
