@@ -8,6 +8,7 @@ const io = @import("../io.zig");
 const queue_mpsc = @import("../queue_mpsc.zig");
 const ThreadPool = @import("../ThreadPool.zig");
 const posix = @import("../posix.zig");
+const computils = @import("../computils.zig");
 
 const Io = @This();
 
@@ -29,20 +30,19 @@ pub fn deinit(self: *Io) void {
 
 pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
     comptime {
-        std.debug.assert(@typeInfo(@TypeOf(op)) == .pointer);
-        std.debug.assert(!@typeInfo(@TypeOf(op)).pointer.is_const);
+        std.debug.assert(
+            std.mem.startsWith(u8, @typeName(@TypeOf(op)), "*io.Op("),
+        );
     }
 
     if (self.batch.len + 1 == std.math.maxInt(u32)) {
         return io.QueueError.SubmissionQueueFull;
     }
 
-    const op_h: *io.OpHeader = &op.header;
-    const no_op: *Op(io.NoOp) = @ptrCast(@alignCast(op_h));
-    no_op.private.io = self;
-    no_op.private.task.node = .{};
+    op.private.io = self;
+    op.private.task.node = .{};
 
-    self.batch.push(ThreadPool.Batch.from(&no_op.private.task));
+    self.batch.push(ThreadPool.Batch.from(&op.private.task));
 
     return @intCast(self.batch.len);
 }
@@ -93,7 +93,7 @@ pub fn Op(T: type) type {
 
 /// I/O operation data specific to this ThreadPool.
 pub fn OpPrivateData(T: type) type {
-    return extern struct {
+    return struct {
         io: *Io = undefined,
 
         task: ThreadPool.Task = .{
@@ -108,7 +108,14 @@ pub fn OpPrivateData(T: type) type {
 
                     const i: *Io = private.io;
 
-                    i.completed.push(@ptrCast(@alignCast(private)));
+                    // Safety: OpPrivateData(T) must have the same layout as
+                    // OpPrivateData(io.NoOp) to be casted and pushed in
+                    // completion queue.
+                    comptime {
+                        computils.canPtrCast(@This(), OpPrivateData(io.NoOp));
+                    }
+                    i.completed.push(@ptrCast(private));
+
                     _ = i.active.fetchSub(1, .seq_cst);
                     std.Thread.Futex.wake(&i.active, 1);
                 }

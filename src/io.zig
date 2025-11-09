@@ -60,25 +60,20 @@ pub const OpCode = enum(c_int) {
 
 /// OpHeader defines field at the beginning of Op(Io, T) that don't depend on
 /// Io and T. It is always safe to read OpHeader even if Io and T are unknown.
-pub const OpHeader = extern struct {
+pub const OpHeader = struct {
     code: OpCode,
 
-    callback: *const fn (*anyopaque, op_h: *OpHeader) callconv(.c) void,
+    callback: *const fn (io: *anyopaque, op_h: *@This()) void,
     user_data: ?*anyopaque,
 };
 
 /// Op defines an I/O operation structure. It is made of a static header and
-/// Io / T dependent fields:
-///
-/// +----------+---------------+
-/// | OpHeader | OpBody(Io, T) |
-/// +----------+---------------+
-///
+/// Io / T dependent fields.
 pub fn Op(Io: type, T: type) type {
-    return extern struct {
+    return struct {
         const Impl = Io;
 
-        header: OpHeader = undefined,
+        header: OpHeader,
 
         // Implementation specific fields.
         private: Impl.OpPrivateData(T),
@@ -93,7 +88,7 @@ pub fn Op(Io: type, T: type) type {
     };
 }
 
-pub const NoOp = extern struct {
+pub const NoOp = struct {
     pub const op_code = OpCode.noop;
 };
 
@@ -107,7 +102,7 @@ pub const NoOp = extern struct {
 /// Linux:
 /// If timer is interrupted, `remaining_sec` and `remaining_sec` can be used to
 /// setup another TimeOut operation and complete the specified pause.
-pub const TimeOut = extern struct {
+pub const TimeOut = struct {
     pub const op_code = OpCode.timeout;
 
     pub const Error = (error.Cancelled || posix.NanoSleepError);
@@ -124,7 +119,7 @@ pub const TimeOut = extern struct {
     }
 };
 
-pub const OpenAt = extern struct {
+pub const OpenAt = struct {
     pub const op_code = OpCode.openat;
 
     pub const Error = fs.File.OpenError;
@@ -159,7 +154,7 @@ pub const OpenAt = extern struct {
     }
 };
 
-pub const Close = extern struct {
+pub const Close = struct {
     pub const op_code = OpCode.close;
 
     pub const Intern = struct {
@@ -173,7 +168,7 @@ pub const Close = extern struct {
     file: fs.File.Handle,
 };
 
-pub const PRead = extern struct {
+pub const PRead = struct {
     pub const op_code = OpCode.pread;
 
     pub const Error = fs.File.PReadError;
@@ -207,7 +202,7 @@ pub const PRead = extern struct {
     }
 };
 
-pub const PWrite = extern struct {
+pub const PWrite = struct {
     pub const op_code = OpCode.pwrite;
 
     pub const Error = fs.File.PWriteError;
@@ -241,7 +236,7 @@ pub const PWrite = extern struct {
     }
 };
 
-pub const FSync = extern struct {
+pub const FSync = struct {
     pub const op_code = OpCode.fsync;
 
     pub const Error = fs.File.SyncError;
@@ -263,7 +258,7 @@ pub const FSync = extern struct {
     }
 };
 
-pub const Stat = extern struct {
+pub const Stat = struct {
     pub const op_code = OpCode.stat;
 
     pub const Error = fs.File.StatError;
@@ -287,7 +282,7 @@ pub const Stat = extern struct {
     }
 };
 
-pub const FileStat = extern struct {
+pub const FileStat = struct {
     const FileKind = enum(c_int) {
         block_device = @intFromEnum(fs.File.Kind.block_device),
         character_device = @intFromEnum(fs.File.Kind.character_device),
@@ -344,7 +339,7 @@ pub const FileStat = extern struct {
     }
 };
 
-pub const GetCwd = extern struct {
+pub const GetCwd = struct {
     pub const op_code = OpCode.getcwd;
 
     pub const Error = error{
@@ -376,7 +371,7 @@ pub const GetCwd = extern struct {
     }
 };
 
-pub const ChDir = extern struct {
+pub const ChDir = struct {
     pub const op_code = OpCode.chdir;
 
     pub const Error = std.posix.ChangeCurDirError;
@@ -397,7 +392,7 @@ pub const ChDir = extern struct {
     }
 };
 
-pub const UnlinkAt = extern struct {
+pub const UnlinkAt = struct {
     pub const op_code = OpCode.unlinkat;
 
     pub const Error = (fs.Dir.DeleteFileError || fs.Dir.DeleteDirError);
@@ -427,7 +422,7 @@ pub const UnlinkAt = extern struct {
     }
 };
 
-pub const Socket = extern struct {
+pub const Socket = struct {
     pub const op_code = OpCode.socket;
 
     pub const Error = std.posix.SocketError;
@@ -465,7 +460,7 @@ pub const Socket = extern struct {
     }
 };
 
-pub const Bind = extern struct {
+pub const Bind = struct {
     pub const op_code = OpCode.bind;
 
     pub const Error = std.posix.BindError;
@@ -481,7 +476,7 @@ pub const Bind = extern struct {
     }
 };
 
-pub const Listen = extern struct {
+pub const Listen = struct {
     pub const op_code = OpCode.listen;
 
     pub const Error = std.posix.ListenError;
@@ -496,7 +491,7 @@ pub const Listen = extern struct {
     }
 };
 
-pub const Accept = extern struct {
+pub const Accept = struct {
     pub const op_code = OpCode.accept;
 
     pub const Error = std.posix.AcceptError;
@@ -515,7 +510,7 @@ pub const Accept = extern struct {
     }
 };
 
-pub const Connect = extern struct {
+pub const Connect = struct {
     pub const op_code = OpCode.connect;
 
     pub const Error = std.posix.ConnectError;
@@ -531,7 +526,7 @@ pub const Connect = extern struct {
     }
 };
 
-pub const Shutdown = extern struct {
+pub const Shutdown = struct {
     pub const op_code = OpCode.shutdown;
 
     pub const Error = std.posix.ShutdownError;
@@ -552,13 +547,13 @@ pub const Shutdown = extern struct {
     }
 };
 
-pub const CloseSocket = extern struct {
+pub const CloseSocket = struct {
     pub const op_code = OpCode.closesocket;
 
     socket: std.posix.socket_t,
 };
 
-pub const Recv = extern struct {
+pub const Recv = struct {
     pub const op_code = OpCode.recv;
 
     pub const Error = std.posix.RecvFromError;
@@ -592,7 +587,7 @@ pub const Recv = extern struct {
     }
 };
 
-pub const Send = extern struct {
+pub const Send = struct {
     pub const op_code = OpCode.send;
 
     pub const Error = std.posix.SendError;
@@ -626,7 +621,7 @@ pub const Send = extern struct {
     }
 };
 
-pub const Spawn = extern struct {
+pub const Spawn = struct {
     pub const op_code = OpCode.spawn;
 
     pub const Error = std.process.Child.SpawnError;
@@ -677,7 +672,7 @@ pub const Spawn = extern struct {
     }
 };
 
-pub const WaitPid = extern struct {
+pub const WaitPid = struct {
     pub const op_code = OpCode.waitpid;
 
     pub const Error = error{
@@ -703,16 +698,23 @@ pub fn opInitOf(Io: type, T: type) OpConstructor(Io, T) {
         pub fn func(
             data: if (@hasDecl(T, "Intern")) T.Intern else T,
             user_data: ?*anyopaque,
-            callback: *const fn (*Io, *Op(Io, T)) callconv(.c) void,
+            comptime callback: *const fn (*Io, *Op(Io, T)) void,
         ) Op(Io, T) {
             return .{
                 .header = .{
                     .code = T.op_code,
                     .user_data = user_data,
-                    .callback = @as(
-                        *const fn (*anyopaque, *OpHeader) callconv(.c) void,
-                        @ptrCast(callback),
-                    ),
+                    .callback = struct {
+                        fn cb(io: *anyopaque, op_h: *OpHeader) void {
+                            const op: *Op(Io, T) = @alignCast(
+                                @fieldParentPtr("header", op_h),
+                            );
+                            @call(.auto, callback, .{
+                                @as(*Io, @ptrCast(@alignCast(io))),
+                                op,
+                            });
+                        }
+                    }.cb,
                 },
                 .data = if (@hasDecl(T, "Intern")) data.toExtern() else data,
                 .private = Io.OpPrivateData(T).init(.{}),
@@ -726,13 +728,13 @@ pub fn OpConstructor(Io: type, T: type) type {
         return *const fn (
             T.Intern,
             user_data: ?*anyopaque,
-            callback: *const fn (*Io, *Op(Io, T)) callconv(.c) void,
+            comptime callback: *const fn (*Io, *Op(Io, T)) void,
         ) Op(Io, T);
     } else {
         return *const fn (
             T,
             user_data: ?*anyopaque,
-            callback: *const fn (*Io, *Op(Io, T)) callconv(.c) void,
+            comptime callback: *const fn (*Io, *Op(Io, T)) void,
         ) Op(Io, T);
     }
 }

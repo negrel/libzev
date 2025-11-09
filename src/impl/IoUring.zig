@@ -35,20 +35,21 @@ pub fn deinit(self: *Io) void {
 
 pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
     comptime {
-        std.debug.assert(@typeInfo(@TypeOf(op)) == .pointer);
-        std.debug.assert(!@typeInfo(@TypeOf(op)).pointer.is_const);
+        std.debug.assert(
+            std.mem.startsWith(u8, @typeName(@TypeOf(op)), "*io.Op("),
+        );
     }
 
     if (self.tpool.batch.len + self.sqe_len + 1 == std.math.maxInt(u32)) {
         return io.QueueError.SubmissionQueueFull;
     }
 
-    switch (op.header.code) {
-        .getcwd, .chdir, .spawn => {
+    switch (@TypeOf(op)) {
+        *Op(io.GetCwd), *Op(io.ChDir), *Op(io.Spawn) => {
             _ = try self.tpool.queue(op);
         },
         else => {
-            try self.queueOpHeader(&op.header);
+            try self.queueOpHeader(op);
             self.sqe_len += 1;
         },
     }
@@ -56,30 +57,28 @@ pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
     return self.sqe_len + @as(u32, @intCast(self.tpool.batch.len));
 }
 
-fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
+fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
     const sqe = try self.ring.get_sqe();
 
     // Prepare entry.
-    switch (op_h.code) {
-        .noop => sqe.prep_nop(),
-        .timeout => {
-            const timeout_op = Op(io.TimeOut).fromHeader(op_h);
-            timeout_op.private.uring_data = .{
-                .sec = std.math.cast(isize, timeout_op.data.sec) orelse
+    switch (@TypeOf(op)) {
+        *Op(io.NoOp) => sqe.prep_nop(),
+        *Op(io.TimeOut) => {
+            op.private.uring_data = .{
+                .sec = std.math.cast(isize, op.data.sec) orelse
                     std.math.maxInt(isize),
-                .nsec = std.math.cast(isize, timeout_op.data.nsec) orelse
+                .nsec = std.math.cast(isize, op.data.nsec) orelse
                     std.time.ns_per_s - 1,
             };
 
             sqe.prep_timeout(
-                &timeout_op.private.uring_data,
+                &op.private.uring_data,
                 1,
                 linux.IORING_TIMEOUT_ABS | linux.IORING_TIMEOUT_ETIME_SUCCESS,
             );
         },
-        .openat => {
-            const openat_op = Op(io.OpenAt).fromHeader(op_h);
-            const d = openat_op.data;
+        *Op(io.OpenAt) => {
+            const d = op.data;
             sqe.prep_openat(
                 d.dir,
                 d.path,
@@ -87,127 +86,112 @@ fn queueOpHeader(self: *Io, op_h: *io.OpHeader) io.QueueError!void {
                 d.mode,
             );
         },
-        .close => {
-            const close_op = Op(io.Close).fromHeader(op_h);
-            sqe.prep_close(close_op.data.file);
+        *Op(io.Close) => {
+            sqe.prep_close(op.data.file);
         },
-        .pread => {
-            const pread_op = Op(io.PRead).fromHeader(op_h);
-            const d = pread_op.data;
+        *Op(io.PRead) => {
+            const d = op.data;
             sqe.prep_read(d.file, d.buffer[0..d.buffer_len], d.offset);
         },
-        .pwrite => {
-            const pwrite_op = Op(io.PWrite).fromHeader(op_h);
-            const d = pwrite_op.data;
+        *Op(io.PWrite) => {
+            const d = op.data;
             sqe.prep_write(d.file, d.buffer[0..d.buffer_len], d.offset);
         },
-        .fsync => {
-            const fsync_op = Op(io.FSync).fromHeader(op_h);
-            sqe.prep_fsync(fsync_op.data.file, 0);
+        *Op(io.FSync) => {
+            sqe.prep_fsync(op.data.file, 0);
         },
-        .stat => {
-            const stat_op = Op(io.Stat).fromHeader(op_h);
+        *Op(io.Stat) => {
             sqe.prep_statx(
-                stat_op.data.file,
+                op.data.file,
                 "",
                 linux.AT.EMPTY_PATH,
                 linux.STATX_TYPE | linux.STATX_MODE | linux.STATX_ATIME |
                     linux.STATX_MTIME | linux.STATX_CTIME,
-                &stat_op.private.uring_data,
+                &op.private.uring_data,
             );
         },
-        .getcwd, .chdir => unreachable,
-        .unlinkat => {
-            const unlinkat_op = Op(io.UnlinkAt).fromHeader(op_h);
+        *Op(io.GetCwd), *Op(io.ChDir) => unreachable,
+        *Op(io.UnlinkAt) => {
             sqe.prep_unlinkat(
-                unlinkat_op.data.dir,
-                unlinkat_op.data.path,
-                if (unlinkat_op.data.remove_dir) posix.AT.REMOVEDIR else 0,
+                op.data.dir,
+                op.data.path,
+                if (op.data.remove_dir) posix.AT.REMOVEDIR else 0,
             );
         },
-        .socket => {
-            const socket_op = Op(io.Socket).fromHeader(op_h);
+        *Op(io.Socket) => {
             sqe.prep_socket(
-                @intFromEnum(socket_op.data.domain),
-                @intFromEnum(socket_op.data.socket_type),
-                @intFromEnum(socket_op.data.protocol),
+                @intFromEnum(op.data.domain),
+                @intFromEnum(op.data.socket_type),
+                @intFromEnum(op.data.protocol),
                 0,
             );
         },
-        .bind => {
-            const bind_op = Op(io.Bind).fromHeader(op_h);
+        *Op(io.Bind) => {
             sqe.prep_bind(
-                bind_op.data.socket,
-                bind_op.data.address,
-                bind_op.data.address_len,
+                op.data.socket,
+                op.data.address,
+                op.data.address_len,
                 0,
             );
         },
-        .listen => {
-            const listen_op = Op(io.Listen).fromHeader(op_h);
+        *Op(io.Listen) => {
             sqe.prep_listen(
-                listen_op.data.socket,
-                listen_op.data.backlog,
+                op.data.socket,
+                op.data.backlog,
                 0,
             );
         },
-        .accept => {
-            const accept_op = Op(io.Accept).fromHeader(op_h);
+        *Op(io.Accept) => {
             sqe.prep_accept(
-                accept_op.data.socket,
-                accept_op.data.address,
-                accept_op.data.address_len,
+                op.data.socket,
+                op.data.address,
+                op.data.address_len,
                 0,
             );
         },
-        .connect => {
-            const connect_op = Op(io.Connect).fromHeader(op_h);
+        *Op(io.Connect) => {
             sqe.prep_connect(
-                connect_op.data.socket,
-                connect_op.data.address,
-                connect_op.data.address_len,
+                op.data.socket,
+                op.data.address,
+                op.data.address_len,
             );
         },
-        .shutdown => {
-            const shutdown_op = Op(io.Shutdown).fromHeader(op_h);
+        *Op(io.Shutdown) => {
             sqe.prep_shutdown(
-                shutdown_op.data.socket,
-                @intFromEnum(shutdown_op.data.how),
+                op.data.socket,
+                @intFromEnum(op.data.how),
             );
         },
-        .closesocket => {
-            const closesocket_op = Op(io.CloseSocket).fromHeader(op_h);
-            sqe.prep_close(closesocket_op.data.socket);
+        *Op(io.CloseSocket) => {
+            sqe.prep_close(op.data.socket);
         },
-        .recv => {
-            const recv_op = Op(io.Recv).fromHeader(op_h);
+        *Op(io.Recv) => {
             sqe.prep_recv(
-                recv_op.data.socket,
-                recv_op.data.buffer[0..recv_op.data.buffer_len],
-                recv_op.data.flags,
+                op.data.socket,
+                op.data.buffer[0..op.data.buffer_len],
+                op.data.flags,
             );
         },
-        .send => {
-            const send_op = Op(io.Send).fromHeader(op_h);
+        *Op(io.Send) => {
             sqe.prep_send(
-                send_op.data.socket,
-                send_op.data.buffer[0..send_op.data.buffer_len],
-                send_op.data.flags,
+                op.data.socket,
+                op.data.buffer[0..op.data.buffer_len],
+                op.data.flags,
             );
         },
-        .spawn => unreachable,
-        .waitpid => {
-            const waitpid_op = Op(io.WaitPid).fromHeader(op_h);
+        *Op(io.Spawn) => unreachable,
+        *Op(io.WaitPid) => {
             sqe.prep_waitid(
                 linux.P.PID,
-                waitpid_op.data.pid,
-                &waitpid_op.private.uring_data,
+                op.data.pid,
+                &op.private.uring_data,
                 linux.W.EXITED,
                 0,
             );
         },
+        else => unreachable,
     }
-    sqe.user_data = @intFromPtr(op_h);
+    sqe.user_data = @intFromPtr(&op.header);
 }
 
 pub fn submit(self: *Io) io.SubmitError!u32 {
@@ -403,6 +387,7 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
                 );
                 op.data.stat = .fromStdFsFileStat(std_stat);
             }
+            op_h.callback(self, @ptrCast(op));
         },
         .getcwd, .chdir => unreachable,
         .unlinkat => {
@@ -598,7 +583,7 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
         },
     }
 
-    op_h.callback(self, op_h);
+    op_h.callback(@ptrCast(self), @ptrCast(op_h));
 }
 
 fn errno(err_code: i32) linux.E {
@@ -631,7 +616,7 @@ pub fn OpPrivateData(T: type) type {
         break :T linux.siginfo_t;
     } else void;
 
-    return extern struct {
+    return struct {
         // Must be at end of struct so we can access field that doesn't depend
         // on T.
         uring_data: UringData = undefined,
