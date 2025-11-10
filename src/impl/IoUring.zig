@@ -111,9 +111,7 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
                 d.mode,
             );
         },
-        *Op(io.Close) => {
-            sqe.prep_close(op.data.file);
-        },
+        *Op(io.Close) => sqe.prep_close(op.data.file.handle),
         *Op(io.PRead) => {
             const d = op.data;
             sqe.prep_read(d.file, d.buffer[0..d.buffer_len], d.offset);
@@ -302,7 +300,12 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
                 @as(isize, @intCast(cqe.res)),
             );
         },
-        .close => {},
+        .close => {
+            const op = Op(io.Close).fromHeader(op_h);
+            op.data.result = ThreadPool.closeErrorFromPosixErrno(
+                @as(isize, @intCast(cqe.res)),
+            );
+        },
         .pread => {
             const op = Op(io.PRead).fromHeader(op_h);
             if (cqe.res < 0) {

@@ -171,18 +171,30 @@ pub const OpenAt = struct {
     result: Error!fs.File = undefined,
 };
 
+/// Close operation closes a file, so that it no longer refers to any file and
+/// may be reused. This operation never fails.
 pub const Close = struct {
     pub const op_code = OpCode.close;
 
-    pub const Intern = struct {
-        file: fs.File,
+    pub const Error = error{
+        // fd isn't a valid open file descriptor.
+        BadFd,
+        // The user's quota of disk blocks on the filesystem containing the file
+        // referred to by fd has been exhausted.
+        DiskQuota,
+        // An I/O error occurred.
+        InputOutput,
+        // No space left.
+        NoSpaceLeft,
+        // The close() call was interrupted by a signal.
+        SignalInterrupt,
 
-        fn toExtern(self: Intern) Close {
-            return .{ .file = self.file.handle };
-        }
+        // Unexpected error.
+        Unexpected,
     };
 
-    file: fs.File.Handle,
+    file: fs.File,
+    result: Error!void = undefined,
 };
 
 pub const PRead = struct {

@@ -1048,15 +1048,17 @@ const testutils = struct {
 
     fn close(
         io: anytype,
-        data: zev.Close.Intern,
+        data: zev.Close,
     ) !void {
         const Io = Deref(@TypeOf(io));
 
         const Static = struct {
             var callbackCalled: bool = undefined;
+            var result: zev.Close.Error!void = undefined;
 
-            fn closeCallback(_: *Io, _: *Io.Op(zev.Close)) void {
+            fn closeCallback(_: *Io, op: *Io.Op(zev.Close)) void {
                 callbackCalled = true;
+                result = op.data.result;
             }
         };
         Static.callbackCalled = false;
@@ -1068,5 +1070,6 @@ const testutils = struct {
         _ = try pollAtLeast(io, 1, std.time.ns_per_s);
 
         try std.testing.expect(Static.callbackCalled);
+        try Static.result;
     }
 };

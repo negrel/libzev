@@ -150,14 +150,11 @@ pub fn OpPrivateData(T: type) type {
                             self.toOp().data.ms * std.time.ns_per_ms,
                         );
                     } else {
-                        timeout(op);
+                        doTimeout(op);
                     }
                 },
-                .openat => openat(op),
-                .close => {
-                    const f: std.fs.File = .{ .handle = op.data.file };
-                    f.close();
-                },
+                .openat => doOpenat(op),
+                .close => doClose(op),
                 .pread => {
                     const d = &op.data;
                     const f: std.fs.File = .{ .handle = d.file };
@@ -455,7 +452,7 @@ const lfs64_abi = builtin.os.tag == .linux and
     builtin.link_libc and
     (builtin.abi.isGnu() or builtin.abi.isAndroid());
 
-fn timeout(op: *Op(io.TimeOut)) void {
+fn doTimeout(op: *Op(io.TimeOut)) void {
     const req: posix.system.timespec = .{
         .sec = std.math.cast(i64, op.data.msec / std.time.ms_per_s) orelse
             std.math.maxInt(i64),
@@ -480,7 +477,7 @@ fn timeout(op: *Op(io.TimeOut)) void {
     };
 }
 
-fn openat(op: *Op(io.OpenAt)) void {
+fn doOpenat(op: *Op(io.OpenAt)) void {
     const openat_sym = if (lfs64_abi) system.openat64 else system.openat;
 
     const d = &op.data;
@@ -548,6 +545,24 @@ pub fn openAtErrorFromPosixErrno(rc: anytype) io.OpenAt.Error!std.fs.File {
         .PERM => error.PermissionDenied,
         .ROFS => error.ReadOnlyFileSystem,
         .TXTBSY => error.FileBusy,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+fn doClose(op: *Op(io.Close)) void {
+    op.data.result = closeErrorFromPosixErrno(
+        system.close(op.data.file.handle),
+    );
+}
+
+pub fn closeErrorFromPosixErrno(rc: anytype) io.Close.Error!void {
+    if (rc >= 0) return;
+    return switch (posix.errno(rc)) {
+        .BADF => error.BadFd,
+        .INTR => error.SignalInterrupt,
+        .IO => error.InputOutput,
+        .NOSPC => error.NoSpaceLeft,
+        .DQUOT => error.DiskQuota,
         else => |err| posix.unexpectedErrno(err),
     };
 }
