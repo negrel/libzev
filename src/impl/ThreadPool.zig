@@ -3,11 +3,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const linux = std.os.linux;
+const posix = std.posix;
+const system = posix.system;
 
 const io = @import("../io.zig");
 const queue_mpsc = @import("../queue_mpsc.zig");
 const ThreadPool = @import("../ThreadPool.zig");
-const posix = @import("../posix.zig");
 const computils = @import("../computils.zig");
 
 const Io = @This();
@@ -149,33 +150,10 @@ pub fn OpPrivateData(T: type) type {
                             self.toOp().data.ms * std.time.ns_per_ms,
                         );
                     } else {
-                        const req: posix.timespec = .{
-                            .sec = std.math.cast(isize, op.data.sec) orelse
-                                std.math.maxInt(isize),
-                            .nsec = std.math.cast(isize, op.data.nsec) orelse
-                                std.time.ns_per_s - 1,
-                        };
-                        var rem: posix.timespec = .{ .sec = 0, .nsec = 0 };
-                        posix.nanosleep(req, &rem) catch |err| {
-                            op.data.err_code = @intFromError(err);
-                            return;
-                        };
-                        op.data.remaining_sec = @intCast(rem.sec);
-                        op.data.remaining_nsec = @intCast(rem.nsec);
+                        timeout(op);
                     }
                 },
-                .openat => {
-                    const fd = posix.openatZ(
-                        op.data.dir,
-                        op.data.path,
-                        op.data.flags,
-                        op.data.mode,
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                        return;
-                    };
-                    op.data.fd = fd;
-                },
+                .openat => openat(op),
                 .close => {
                     const f: std.fs.File = .{ .handle = op.data.file };
                     f.close();
@@ -472,3 +450,104 @@ pub const recv = io.opInitOf(Io, io.Recv);
 pub const send = io.opInitOf(Io, io.Send);
 pub const spawn = io.opInitOf(Io, io.Spawn);
 pub const waitPid = io.opInitOf(Io, io.WaitPid);
+
+const lfs64_abi = builtin.os.tag == .linux and
+    builtin.link_libc and
+    (builtin.abi.isGnu() or builtin.abi.isAndroid());
+
+fn timeout(op: *Op(io.TimeOut)) void {
+    const req: posix.system.timespec = .{
+        .sec = std.math.cast(i64, op.data.msec / std.time.ms_per_s) orelse
+            std.math.maxInt(i64),
+        .nsec = std.math.cast(
+            i64,
+            (op.data.msec % std.time.ms_per_s) * std.time.ns_per_ms,
+        ) orelse std.math.maxInt(i64),
+    };
+    var rem: posix.system.timespec = .{ .sec = 0, .nsec = 0 };
+
+    op.data.result = switch (posix.errno(posix.system.nanosleep(&req, &rem))) {
+        .SUCCESS => undefined,
+        .FAULT => error.BadAddress,
+        .INVAL => error.InvalidSyscallParameters,
+        .INTR => E: {
+            op.data.remaining_msec = @as(usize, @intCast(rem.nsec)) *
+                std.time.ms_per_s +
+                @as(usize, @intCast(rem.nsec)) / std.time.ns_per_ms;
+            break :E error.SignalInterrupt;
+        },
+        else => |err| std.posix.unexpectedErrno(err),
+    };
+}
+
+fn openat(op: *Op(io.OpenAt)) void {
+    const openat_sym = if (lfs64_abi) system.openat64 else system.openat;
+
+    const d = &op.data;
+
+    const path = posix.toPosixPath(d.path) catch |err| {
+        d.result = err;
+        return;
+    };
+    const flags: posix.O = .{
+        .ACCMODE = switch (d.options.read) {
+            false => switch (d.options.write) {
+                false => .RDONLY,
+                true => .WRONLY,
+            },
+            true => switch (d.options.write) {
+                false => .RDONLY,
+                true => .RDWR,
+            },
+        },
+        .TRUNC = d.options.truncate,
+        .CREAT = d.options.create or op.data.options.create_new,
+        .EXCL = d.options.create_new,
+        .APPEND = d.options.append,
+        .CLOEXEC = true,
+    };
+
+    op.data.result = openAtErrorFromPosixErrno(openat_sym(
+        d.dir.fd,
+        path[0..],
+        flags,
+        d.mode,
+    ));
+}
+
+pub fn openAtErrorFromPosixErrno(rc: anytype) io.OpenAt.Error!std.fs.File {
+    if (rc > 0) return .{ .handle = @as(std.fs.File.Handle, @intCast(rc)) };
+    return switch (posix.errno(rc)) {
+        .ACCES => error.AccessDenied,
+        .AGAIN => error.WouldBlock,
+        .BADF => error.InvalidDirFd,
+        .BUSY => error.DeviceBusy,
+        .DQUOT => error.DiskQuota,
+        .EXIST => error.PathAlreadyExists,
+        .FAULT => error.ParamsOutsideAccessibleAddressSpace,
+        .FBIG => error.FileTooBig,
+        .ILSEQ => |err| if (builtin.os.tag == .wasi)
+            error.InvalidUtf8
+        else
+            posix.unexpectedErrno(err),
+        .INTR => error.SignalInterrupt,
+        .INVAL => error.InvalidArguments,
+        .ISDIR => error.IsDir,
+        .LOOP => error.SymLinkLoop,
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NAMETOOLONG => error.NameTooLong,
+        .NFILE => error.SystemFdQuotaExceeded,
+        .NODEV => error.NoDevice,
+        .NOENT => error.FileNotFound,
+        .NOMEM => error.SystemResources,
+        .NOSPC => error.NoSpaceLeft,
+        .NOTDIR => error.NotDir,
+        .NXIO => error.NoDevice,
+        .OPNOTSUPP => error.FileLocksNotSupported,
+        .OVERFLOW => error.FileTooBig,
+        .PERM => error.PermissionDenied,
+        .ROFS => error.ReadOnlyFileSystem,
+        .TXTBSY => error.FileBusy,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}

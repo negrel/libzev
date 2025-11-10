@@ -87,8 +87,7 @@ test "batch of timeout" {
 
             for (0..timeouts.len) |i| {
                 timeouts[i] = Io.timeOut(.{
-                    .sec = 0,
-                    .nsec = (i * std.time.ns_per_ms) % 5,
+                    .msec = i % 5,
                 }, null, &Static.callback);
                 try testutils.queue(&io, &timeouts[i], i + 1);
             }
@@ -127,7 +126,7 @@ test "openat/pread/close" {
                 .{
                     .dir = std.fs.cwd(),
                     .path = "./src/testdata/file.txt",
-                    .flags = .{ .ACCMODE = .RDONLY },
+                    .options = .{ .read = true },
                     .mode = 0,
                 },
             );
@@ -204,10 +203,11 @@ test "openat/pwrite/fsync/close/unlinkat" {
                 .{
                     .dir = tmpDir.dir,
                     .path = "file.txt",
-                    .flags = .{
-                        .ACCMODE = .RDWR,
-                        .CREAT = true,
-                        .TRUNC = true,
+                    .options = .{
+                        .read = true,
+                        .write = true,
+                        .create = true,
+                        .truncate = true,
                     },
                     .mode = 0o666,
                 },
@@ -298,7 +298,7 @@ test "openat/stat/close" {
             const f = try testutils.openAt(&io, .{
                 .dir = std.fs.cwd(),
                 .path = "./src/testdata/file.txt",
-                .flags = .{ .ACCMODE = .RDONLY },
+                .options = .{ .read = true },
                 .mode = 0,
             });
 
@@ -1020,17 +1020,17 @@ const testutils = struct {
 
     fn openAt(
         io: anytype,
-        data: zev.OpenAt.Intern,
+        data: zev.OpenAt,
     ) !std.fs.File {
         const Io = Deref(@TypeOf(io));
 
         const Static = struct {
             var callbackCalled: bool = undefined;
-            var file: std.fs.File.OpenError!std.fs.File = undefined;
+            var file: zev.OpenAt.Error!std.fs.File = undefined;
 
             fn openAtCallback(_: *Io, op: *Io.Op(zev.OpenAt)) void {
                 callbackCalled = true;
-                file = op.data.result();
+                file = op.data.result;
             }
         };
         Static.callbackCalled = false;

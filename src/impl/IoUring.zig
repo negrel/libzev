@@ -65,10 +65,14 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
         *Op(io.NoOp) => sqe.prep_nop(),
         *Op(io.TimeOut) => {
             op.private.uring_data = .{
-                .sec = std.math.cast(isize, op.data.sec) orelse
-                    std.math.maxInt(isize),
-                .nsec = std.math.cast(isize, op.data.nsec) orelse
-                    std.time.ns_per_s - 1,
+                .sec = std.math.cast(
+                    i64,
+                    op.data.msec / std.time.ms_per_s,
+                ) orelse std.math.maxInt(i64),
+                .nsec = std.math.cast(
+                    i64,
+                    (op.data.msec % std.time.ms_per_s) * std.time.ns_per_ms,
+                ) orelse std.math.maxInt(i64),
             };
 
             sqe.prep_timeout(
@@ -79,10 +83,31 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
         },
         *Op(io.OpenAt) => {
             const d = op.data;
+            op.private.uring_data = std.posix.toPosixPath(d.path) catch
+                [1:0]u8{0} ** (std.posix.PATH_MAX - 1);
+
+            const flags: linux.O = .{
+                .ACCMODE = switch (d.options.read) {
+                    false => switch (d.options.write) {
+                        false => .RDONLY,
+                        true => .WRONLY,
+                    },
+                    true => switch (d.options.write) {
+                        false => .RDONLY,
+                        true => .RDWR,
+                    },
+                },
+                .TRUNC = d.options.truncate,
+                .CREAT = d.options.create or d.options.create_new,
+                .EXCL = d.options.create_new,
+                .APPEND = d.options.append,
+                .CLOEXEC = true,
+            };
+
             sqe.prep_openat(
-                d.dir,
-                d.path,
-                d.flags,
+                d.dir.fd,
+                op.private.uring_data[0..],
+                flags,
                 d.mode,
             );
         },
@@ -263,50 +288,19 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
             if (cqe.res < 0) {
                 const rc = errno(cqe.res);
                 if (rc != .TIME)
-                    op.data.err_code = @intFromError(switch (rc) {
+                    op.data.result = switch (rc) {
                         .FAULT => posix.NanoSleepError.BadAddress,
                         .INVAL => posix.NanoSleepError.InvalidSyscallParameters,
                         .INTR => posix.NanoSleepError.SignalInterrupt,
                         else => |err| posix.unexpectedErrno(err),
-                    });
+                    };
             }
         },
         .openat => {
             const op = Op(io.OpenAt).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .INVAL => error.BadPathName,
-                    .ACCES => error.AccessDenied,
-                    .FBIG => error.FileTooBig,
-                    .OVERFLOW => error.FileTooBig,
-                    .ISDIR => error.IsDir,
-                    .LOOP => error.SymLinkLoop,
-                    .MFILE => error.ProcessFdQuotaExceeded,
-                    .NAMETOOLONG => error.NameTooLong,
-                    .NFILE => error.SystemFdQuotaExceeded,
-                    .NODEV => error.NoDevice,
-                    .NOENT => error.FileNotFound,
-                    .SRCH => error.ProcessNotFound,
-                    .NOMEM => error.SystemResources,
-                    .NOSPC => error.NoSpaceLeft,
-                    .NOTDIR => error.NotDir,
-                    .PERM => error.PermissionDenied,
-                    .EXIST => error.PathAlreadyExists,
-                    .BUSY => error.DeviceBusy,
-                    .OPNOTSUPP => error.FileLocksNotSupported,
-                    .AGAIN => error.WouldBlock,
-                    .TXTBSY => error.FileBusy,
-                    .NXIO => error.NoDevice,
-                    .ILSEQ => |err| if (builtin.os.tag == .wasi)
-                        error.InvalidUtf8
-                    else
-                        posix.unexpectedErrno(err),
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            } else {
-                op.data.fd = cqe.res;
-            }
+            op.data.result = ThreadPool.openAtErrorFromPosixErrno(
+                @as(isize, @intCast(cqe.res)),
+            );
         },
         .close => {},
         .pread => {
@@ -604,6 +598,8 @@ pub fn Op(T: type) type {
 pub fn OpPrivateData(T: type) type {
     const UringData = if (T == io.TimeOut) T: {
         break :T linux.kernel_timespec;
+    } else if (T == io.OpenAt) T: {
+        break :T [std.posix.PATH_MAX - 1:0]u8;
     } else if (T == io.Stat) T: {
         break :T linux.Statx;
     } else if (T == io.GetCwd) {

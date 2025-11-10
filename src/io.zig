@@ -6,7 +6,8 @@ const fs = std.fs;
 
 const posix = @import("./posix.zig");
 
-pub const OpCode = enum(c_int) {
+/// OpCode enumerates all supported I/O operation.
+pub const OpCode = enum {
     noop,
     timeout,
     openat,
@@ -58,8 +59,7 @@ pub const OpCode = enum(c_int) {
     }
 };
 
-/// OpHeader defines field at the beginning of Op(Io, T) that don't depend on
-/// Io and T. It is always safe to read OpHeader even if Io and T are unknown.
+/// OpHeader defines static fields of Op(Io, T).
 pub const OpHeader = struct {
     code: OpCode,
 
@@ -67,8 +67,8 @@ pub const OpHeader = struct {
     user_data: ?*anyopaque,
 };
 
-/// Op defines an I/O operation structure. It is made of a static header and
-/// Io / T dependent fields.
+/// Op defines an I/O operation. It is made of a static header and Io / T
+/// dependent fields.
 pub fn Op(Io: type, T: type) type {
     return struct {
         const Impl = Io;
@@ -88,70 +88,87 @@ pub fn Op(Io: type, T: type) type {
     };
 }
 
+/// NoOp is a no-operation I/O operation. Do not perform any I/O. This is useful
+/// for testing the performance of the Io implementation itself.
 pub const NoOp = struct {
     pub const op_code = OpCode.noop;
 };
 
-/// TimeOut operation complete after `sec` seconds and `nsec` nanoseconds has
-/// passed. The value of nanoseconds MUST be in the range of [0, 999999999].
+/// TimeOut operation complete after `msec` milliseconds passed.
 ///
 /// Windows:
-/// Time precision is limited to milliseconds. `remaining_sec` and
-/// `remaining_nsec` is not used.
+/// `remaining_msec` is not used.
 ///
 /// Linux:
-/// If timer is interrupted, `remaining_sec` and `remaining_sec` can be used to
-/// setup another TimeOut operation and complete the specified pause.
+/// If timer is interrupted, `remaining_msec` can be used to setup another
+/// TimeOut operation and complete the specified pause.
 pub const TimeOut = struct {
     pub const op_code = OpCode.timeout;
 
-    pub const Error = (error.Cancelled || posix.NanoSleepError);
+    pub const Error = error{
+        BadAddress,
+        SignalInterrupt,
+        InvalidSyscallParameters,
+        Unexpected,
+    };
 
-    sec: usize,
-    nsec: usize,
+    msec: usize,
 
-    remaining_sec: usize = 0,
-    remaining_nsec: usize = 0,
-    err_code: u16 = 0,
-
-    pub fn result(self: *OpenAt) Error!void {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-    }
+    // Remaining time if I/O operation was interrupted by a signal.
+    remaining_msec: usize = 0,
+    result: Error!void = undefined,
 };
 
+/// OpenAt operation opens the file specified by `path`. If the file does not
+/// exist, it may optionally (if options.create or options.create_new is true)
+/// be created.
 pub const OpenAt = struct {
     pub const op_code = OpCode.openat;
 
-    pub const Error = fs.File.OpenError;
-
-    pub const Intern = struct {
-        dir: fs.Dir,
-        path: [:0]const u8,
-        flags: posix.O,
-        mode: u32,
-
-        fn toExtern(self: Intern) OpenAt {
-            return .{
-                .dir = self.dir.fd,
-                .path = self.path.ptr,
-                .flags = self.flags,
-                .mode = self.mode,
-            };
-        }
+    pub const Error = error{
+        AccessDenied,
+        DeviceBusy,
+        DiskQuota,
+        FileBusy,
+        FileLocksNotSupported,
+        FileNotFound,
+        FileTooBig,
+        InvalidArguments,
+        InvalidDirFd,
+        InvalidUtf8,
+        IsDir,
+        NameTooLong,
+        NoDevice,
+        NoSpaceLeft,
+        NotDir,
+        ParamsOutsideAccessibleAddressSpace,
+        PathAlreadyExists,
+        PermissionDenied,
+        ProcessFdQuotaExceeded,
+        ReadOnlyFileSystem,
+        SignalInterrupt,
+        SymLinkLoop,
+        SystemFdQuotaExceeded,
+        SystemResources,
+        Unexpected,
+        WouldBlock,
     };
 
-    dir: fs.File.Handle,
-    path: [*c]const u8,
-    flags: posix.O,
-    mode: u32,
+    pub const Options = packed struct {
+        read: bool = false,
+        write: bool = false,
+        append: bool = false,
+        truncate: bool = false,
+        create: bool = false,
+        create_new: bool = false,
+    };
 
-    fd: fs.File.Handle = -1,
-    err_code: u16 = 0,
+    dir: fs.Dir,
+    path: []const u8,
+    options: Options,
+    mode: u9,
 
-    pub fn result(self: *OpenAt) Error!fs.File {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return .{ .handle = self.fd };
-    }
+    result: Error!fs.File = undefined,
 };
 
 pub const Close = struct {
