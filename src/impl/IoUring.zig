@@ -112,10 +112,11 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
             );
         },
         *Op(io.Close) => sqe.prep_close(op.data.file.handle),
-        *Op(io.PRead) => {
-            const d = op.data;
-            sqe.prep_read(d.file, d.buffer[0..d.buffer_len], d.offset);
-        },
+        *Op(io.PRead) => sqe.prep_read(
+            op.data.file.handle,
+            op.data.buffer,
+            @bitCast(op.data.offset),
+        ),
         *Op(io.PWrite) => {
             const d = op.data;
             sqe.prep_write(d.file, d.buffer[0..d.buffer_len], d.offset);
@@ -308,26 +309,9 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
         },
         .pread => {
             const op = Op(io.PRead).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .SRCH => error.ProcessNotFound,
-                    .AGAIN => error.WouldBlock,
-                    .CANCELED => error.Canceled,
-                    // Can be a race condition.
-                    .BADF => error.NotOpenForReading,
-                    .IO => error.InputOutput,
-                    .ISDIR => error.IsDir,
-                    .NOBUFS => error.SystemResources,
-                    .NOMEM => error.SystemResources,
-                    .NOTCONN => error.SocketNotConnected,
-                    .CONNRESET => error.ConnectionResetByPeer,
-                    .TIMEDOUT => error.ConnectionTimedOut,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            } else {
-                op.data.read = @intCast(cqe.res);
-            }
+            op.data.result = ThreadPool.preadErrorFromPosixErrno(
+                @as(isize, @intCast(cqe.res)),
+            );
         },
         .pwrite => {
             const op = Op(io.PWrite).fromHeader(op_h);

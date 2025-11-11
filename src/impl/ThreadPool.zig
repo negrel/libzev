@@ -155,17 +155,7 @@ pub fn OpPrivateData(T: type) type {
                 },
                 .openat => doOpenat(op),
                 .close => doClose(op),
-                .pread => {
-                    const d = &op.data;
-                    const f: std.fs.File = .{ .handle = d.file };
-                    d.read = f.pread(
-                        d.buffer[0..d.buffer_len],
-                        d.offset,
-                    ) catch |err| {
-                        d.err_code = @intFromError(err);
-                        return;
-                    };
-                },
+                .pread => doPRead(op),
                 .pwrite => {
                     const d = &op.data;
                     const f: std.fs.File = .{ .handle = d.file };
@@ -563,6 +553,45 @@ pub fn closeErrorFromPosixErrno(rc: anytype) io.Close.Error!void {
         .IO => error.InputOutput,
         .NOSPC => error.NoSpaceLeft,
         .DQUOT => error.DiskQuota,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+fn doPRead(op: *Op(io.PRead)) void {
+    var rc: usize = 0;
+    if (op.data.offset == -1) {
+        rc = system.read(
+            op.data.file.handle,
+            op.data.buffer.ptr,
+            op.data.buffer.len,
+        );
+    } else {
+        const pread_sym = if (lfs64_abi) system.pread64 else system.pread;
+        rc = pread_sym(
+            op.data.file.handle,
+            op.data.buffer.ptr,
+            op.data.buffer.len,
+            op.data.offset,
+        );
+    }
+
+    op.data.result = preadErrorFromPosixErrno(rc);
+}
+
+pub fn preadErrorFromPosixErrno(rc: anytype) io.PRead.Error!usize {
+    return switch (posix.errno(rc)) {
+        .SUCCESS => return @intCast(rc),
+        .AGAIN => error.WouldBlock,
+        .BADF => error.BadFd,
+        .FAULT => error.ParamsOutsideAccessibleAddressSpace,
+        .INTR => error.SignalInterrupt,
+        .INVAL => error.BadFd,
+        .IO => error.InputOutput,
+        .ISDIR => error.IsDir,
+        .NXIO => error.InvalidOffset,
+        // Should never happen.
+        // .OVERFLOW => error.Overflow,
+        .SPIPE => error.BadFd,
         else => |err| posix.unexpectedErrno(err),
     };
 }

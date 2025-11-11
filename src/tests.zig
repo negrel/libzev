@@ -107,11 +107,11 @@ test "openat/pread/close" {
         fn tcase(Io: type) !void {
             const Static = struct {
                 var preadCalled: bool = undefined;
-                var read: std.fs.File.PReadError!usize = undefined;
+                var read: zev.PRead.Error!usize = undefined;
 
                 fn preadCallback(_: *Io, iop: *Io.Op(zev.PRead)) void {
                     preadCalled = true;
-                    read = iop.data.result();
+                    read = iop.data.result;
                 }
             };
             Static.preadCalled = false;
@@ -131,7 +131,29 @@ test "openat/pread/close" {
                 },
             );
 
-            // Read.
+            // Read offset -1.
+            {
+                var buf: [64]u8 = undefined;
+                var pread = Io.pRead(.{
+                    .file = f,
+                    .buffer = buf[0..6],
+                    .offset = -1,
+                }, null, Static.preadCallback);
+
+                try testutils.queue(&io, &pread, 1);
+                try testutils.submit(&io, 1);
+
+                _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
+
+                const read = try Static.read;
+
+                try std.testing.expectEqualStrings(
+                    "Hello ",
+                    buf[0..read],
+                );
+            }
+
+            // Read offset 0.
             {
                 var buf: [64]u8 = undefined;
                 var pread = Io.pRead(.{

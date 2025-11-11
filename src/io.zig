@@ -197,38 +197,39 @@ pub const Close = struct {
     result: Error!void = undefined,
 };
 
+/// PRead operation reads up to buffer.len bytes from file at offset `offset`.
+/// The file offset is not changed.
+///
+/// If offset is -1 the offset will use (and advance) the
+/// file position like the read and write system call. This is needed to support
+/// non seekable file such as stdin.
 pub const PRead = struct {
     pub const op_code = OpCode.pread;
 
-    pub const Error = fs.File.PReadError;
-
-    pub const Intern = struct {
-        file: fs.File,
-        buffer: []u8,
-        offset: u64,
-
-        fn toExtern(self: Intern) PRead {
-            return .{
-                .file = self.file.handle,
-                .buffer = self.buffer.ptr,
-                .buffer_len = self.buffer.len,
-                .offset = self.offset,
-            };
-        }
+    pub const Error = error{
+        /// File descriptor is not open or not a file.
+        BadFd,
+        /// I/O error.
+        InputOutput,
+        /// Offset is beyond end of file.
+        InvalidOffset,
+        /// File refers to a directory.
+        IsDir,
+        /// Buffer is outside your accessible address space.
+        ParamsOutsideAccessibleAddressSpace,
+        /// The call was interrupted by a signal before any data was read
+        SignalInterrupt,
+        /// File refers to a file opened with O_NONBLOCK and the read would
+        /// block.
+        WouldBlock,
+        Unexpected,
     };
 
-    file: fs.File.Handle,
-    buffer: [*c]u8,
-    buffer_len: usize,
-    offset: u64,
+    file: fs.File,
+    buffer: []u8,
+    offset: isize,
 
-    read: usize = 0,
-    err_code: u16 = 0,
-
-    pub fn result(self: *PRead) Error!usize {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return self.read;
-    }
+    result: Error!usize = undefined,
 };
 
 pub const PWrite = struct {
