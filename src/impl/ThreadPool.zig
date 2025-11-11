@@ -157,12 +157,7 @@ pub fn OpPrivateData(T: type) type {
                 .close => doClose(op),
                 .pread => doPRead(op),
                 .pwrite => doPWrite(op),
-                .fsync => {
-                    const f: std.fs.File = .{ .handle = op.data.file };
-                    f.sync() catch |err| {
-                        op.data.err_code = @intFromError(err);
-                    };
-                },
+                .fsync => doFSync(op),
                 .stat => {
                     const f: std.fs.File = .{ .handle = op.data.file };
                     const std_stat = f.stat() catch |err| {
@@ -570,7 +565,7 @@ fn doPRead(op: *Op(io.PRead)) void {
 
 pub fn preadErrorFromPosixErrno(rc: anytype) io.PRead.Error!usize {
     return switch (posix.errno(rc)) {
-        .SUCCESS => return @intCast(rc),
+        .SUCCESS => @intCast(rc),
         .AGAIN => error.WouldBlock,
         .BADF => error.BadFd,
         .FAULT => error.ParamsOutsideAccessibleAddressSpace,
@@ -609,7 +604,7 @@ fn doPWrite(op: *Op(io.PWrite)) void {
 
 pub fn pwriteErrorFromPosixErrno(rc: anytype) io.PWrite.Error!usize {
     return switch (posix.errno(rc)) {
-        .SUCCESS => return @intCast(rc),
+        .SUCCESS => @intCast(rc),
         .AGAIN => error.WouldBlock,
         .BADF => error.BadFd,
         // Should never happen, we only write to file.
@@ -626,6 +621,25 @@ pub fn pwriteErrorFromPosixErrno(rc: anytype) io.PWrite.Error!usize {
         .PERM => error.PermissionDenied,
         .PIPE => error.BrokenPipe,
         .SPIPE => error.Unseekable,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+fn doFSync(op: *Op(io.FSync)) void {
+    const rc = system.fsync(op.data.file.handle);
+    op.data.result = fsyncErrorFromPosixErrno(rc);
+}
+
+pub fn fsyncErrorFromPosixErrno(rc: anytype) io.FSync.Error!void {
+    return switch (posix.errno(rc)) {
+        .SUCCESS => {},
+        .BADF => error.BadFd,
+        .INTR => error.SignalInterrupt,
+        .IO => error.InputOutput,
+        .NOSPC => error.NoSpaceLeft,
+        .ROFS => error.ReadOnlyFileSystem,
+        .INVAL => error.InvalidSyscallParameters,
+        .DQUOT => error.DiskQuota,
         else => |err| posix.unexpectedErrno(err),
     };
 }

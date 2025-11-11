@@ -189,7 +189,7 @@ test "openat/pwrite/fsync/close/unlinkat" {
                 var fsyncCalled: bool = undefined;
                 var unlinkAtCalled: bool = undefined;
                 var write: zev.PWrite.Error!usize = undefined;
-                var fsync: std.fs.File.SyncError!void = undefined;
+                var fsync: zev.FSync.Error!void = undefined;
                 var unlinkAt: zev.UnlinkAt.Error!void = undefined;
 
                 fn pwriteCallback(_: *Io, iop: *Io.Op(zev.PWrite)) void {
@@ -199,7 +199,7 @@ test "openat/pwrite/fsync/close/unlinkat" {
 
                 fn fsyncCallback(_: *Io, iop: *Io.Op(zev.FSync)) void {
                     fsyncCalled = true;
-                    fsync = iop.data.result();
+                    fsync = iop.data.result;
                 }
 
                 fn unlinkAtCallback(_: *Io, iop: *Io.Op(zev.UnlinkAt)) void {

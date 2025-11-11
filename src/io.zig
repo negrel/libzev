@@ -256,26 +256,26 @@ pub const PWrite = struct {
     result: Error!usize = undefined,
 };
 
+/// Synchronize file's in-core state with storage so that all information can be
+/// retrieved even if the system crashed or is rebooted.
 pub const FSync = struct {
     pub const op_code = OpCode.fsync;
 
-    pub const Error = fs.File.SyncError;
+    pub const Error = error{
+        BadFd,
+        DiskQuota,
+        InputOutput,
+        InvalidSyscallParameters,
+        NoSpaceLeft,
+        ReadOnlyFileSystem,
+        SignalInterrupt,
 
-    pub const Intern = struct {
-        file: fs.File,
-
-        pub fn toExtern(self: Intern) FSync {
-            return .{ .file = self.file.handle };
-        }
+        Unexpected,
     };
 
-    file: fs.File.Handle,
+    file: fs.File,
 
-    err_code: u16 = 0,
-
-    pub fn result(self: *FSync) Error!void {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-    }
+    result: Error!void = undefined,
 };
 
 pub const Stat = struct {

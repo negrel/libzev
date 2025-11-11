@@ -122,9 +122,7 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
             op.data.buffer,
             @bitCast(op.data.offset),
         ),
-        *Op(io.FSync) => {
-            sqe.prep_fsync(op.data.file, 0);
-        },
+        *Op(io.FSync) => sqe.prep_fsync(op.data.file.handle, 0),
         *Op(io.Stat) => {
             sqe.prep_statx(
                 op.data.file,
@@ -322,15 +320,9 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
         },
         .fsync => {
             const op = Op(io.FSync).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .IO => error.InputOutput,
-                    .NOSPC => error.NoSpaceLeft,
-                    .DQUOT => error.DiskQuota,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            }
+            op.data.result = ThreadPool.fsyncErrorFromPosixErrno(
+                @as(isize, @intCast(cqe.res)),
+            );
         },
         .stat => {
             const op = Op(io.Stat).fromHeader(op_h);
