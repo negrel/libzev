@@ -16,7 +16,7 @@ pub const Close = io.Close;
 pub const PRead = io.PRead;
 pub const PWrite = io.PWrite;
 pub const FSync = io.FSync;
-pub const Stat = io.Stat;
+pub const FStat = io.FStat;
 pub const GetCwd = io.GetCwd;
 pub const ChDir = io.ChDir;
 pub const UnlinkAt = io.UnlinkAt;
@@ -34,4 +34,3 @@ pub const WaitPid = io.WaitPid;
 
 pub const OpCode = io.OpCode;
 pub const PollMode = io.PollMode;
-pub const FileStat = io.FileStat;

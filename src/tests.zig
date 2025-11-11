@@ -302,11 +302,11 @@ test "openat/stat/close" {
         fn tcase(Io: type) !void {
             const Static = struct {
                 var statCalled: bool = undefined;
-                var stat: std.fs.File.StatError!zev.FileStat = undefined;
+                var stat: zev.FStat.Error!zev.FStat.Stat = undefined;
 
-                fn statCallback(_: *Io, iop: *Io.Op(zev.Stat)) void {
+                fn statCallback(_: *Io, iop: *Io.Op(zev.FStat)) void {
                     statCalled = true;
-                    stat = iop.data.result();
+                    stat = iop.data.result;
                 }
             };
             Static.statCalled = false;
@@ -326,7 +326,7 @@ test "openat/stat/close" {
 
             // Stat.
             {
-                var stat = Io.stat(.{ .file = f }, null, Static.statCallback);
+                var stat = Io.fStat(.{ .file = f }, null, Static.statCallback);
 
                 try testutils.queue(&io, &stat, 1);
                 try testutils.submit(&io, 1);

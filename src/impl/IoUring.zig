@@ -123,9 +123,9 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
             @bitCast(op.data.offset),
         ),
         *Op(io.FSync) => sqe.prep_fsync(op.data.file.handle, 0),
-        *Op(io.Stat) => {
+        *Op(io.FStat) => {
             sqe.prep_statx(
-                op.data.file,
+                op.data.file.handle,
                 "",
                 linux.AT.EMPTY_PATH,
                 linux.STATX_TYPE | linux.STATX_MODE | linux.STATX_ATIME |
@@ -324,21 +324,16 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
                 @as(isize, @intCast(cqe.res)),
             );
         },
-        .stat => {
-            const op = Op(io.Stat).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .NOMEM => error.SystemResources,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            } else {
-                const std_stat = std.fs.File.Stat.fromLinux(
-                    op.private.uring_data,
-                );
-                op.data.stat = .fromStdFsFileStat(std_stat);
-            }
-            op_h.callback(self, @ptrCast(op));
+        .fstat => {
+            const op = Op(io.FStat).fromHeader(op_h);
+            ThreadPool.fstatErrorFromPosixErrno(
+                @as(isize, @intCast(cqe.res)),
+            ) catch |err| {
+                op.data.result = err;
+                return;
+            };
+
+            op.data.result = std.fs.File.Stat.fromLinux(op.private.uring_data);
         },
         .getcwd, .chdir => unreachable,
         .unlinkat => {
@@ -557,7 +552,7 @@ pub fn OpPrivateData(T: type) type {
         break :T linux.kernel_timespec;
     } else if (T == io.OpenAt) T: {
         break :T [std.posix.PATH_MAX - 1:0]u8;
-    } else if (T == io.Stat) T: {
+    } else if (T == io.FStat) T: {
         break :T linux.Statx;
     } else if (T == io.GetCwd) {
         return ThreadPool.OpPrivateData(T);
@@ -587,7 +582,7 @@ pub const close = io.opInitOf(Io, io.Close);
 pub const pRead = io.opInitOf(Io, io.PRead);
 pub const pWrite = io.opInitOf(Io, io.PWrite);
 pub const fSync = io.opInitOf(Io, io.FSync);
-pub const stat = io.opInitOf(Io, io.Stat);
+pub const fStat = io.opInitOf(Io, io.FStat);
 pub const getCwd = io.opInitOf(Io, io.GetCwd);
 pub const chDir = io.opInitOf(Io, io.ChDir);
 pub const unlinkAt = io.opInitOf(Io, io.UnlinkAt);

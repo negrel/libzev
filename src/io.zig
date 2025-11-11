@@ -15,7 +15,7 @@ pub const OpCode = enum {
     pread,
     pwrite,
     fsync,
-    stat,
+    fstat,
     getcwd,
     chdir,
     unlinkat,
@@ -40,7 +40,7 @@ pub const OpCode = enum {
             .pread => PRead,
             .pwrite => PWrite,
             .fsync => FSync,
-            .stat => Stat,
+            .fstat => FStat,
             .getcwd => GetCwd,
             .chdir => ChDir,
             .unlinkat => UnlinkAt,
@@ -278,85 +278,27 @@ pub const FSync = struct {
     result: Error!void = undefined,
 };
 
-pub const Stat = struct {
-    pub const op_code = OpCode.stat;
+/// Retrieve information about a file.
+pub const FStat = struct {
+    pub const op_code = OpCode.fstat;
 
-    pub const Error = fs.File.StatError;
+    pub const Error = error{
+        AccessDenied,
+        BadFd,
+        BadAddress,
+        SymLinkLoop,
+        NameTooLong,
+        OutOfMemory,
+        NotDir,
+        Overflow,
 
-    pub const Intern = struct {
-        file: fs.File,
-
-        pub fn toExtern(self: Intern) Stat {
-            return .{ .file = self.file.handle };
-        }
+        Unexpected,
     };
+    pub const Stat = std.fs.File.Stat;
 
-    file: fs.File.Handle,
+    file: fs.File,
 
-    err_code: u16 = 0,
-    stat: FileStat = undefined,
-
-    pub fn result(self: *Stat) Error!FileStat {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return self.stat;
-    }
-};
-
-pub const FileStat = struct {
-    const FileKind = enum(c_int) {
-        block_device = @intFromEnum(fs.File.Kind.block_device),
-        character_device = @intFromEnum(fs.File.Kind.character_device),
-        directory = @intFromEnum(fs.File.Kind.directory),
-        named_pipe = @intFromEnum(fs.File.Kind.named_pipe),
-        sym_link = @intFromEnum(fs.File.Kind.sym_link),
-        file = @intFromEnum(fs.File.Kind.file),
-        unix_domain_socket = @intFromEnum(fs.File.Kind.unix_domain_socket),
-        whiteout = @intFromEnum(fs.File.Kind.whiteout),
-        door = @intFromEnum(fs.File.Kind.door),
-        event_port = @intFromEnum(fs.File.Kind.event_port),
-        unknown = @intFromEnum(fs.File.Kind.unknown),
-
-        comptime {
-            std.debug.assert(@typeInfo(@This()).@"enum".fields.len ==
-                @typeInfo(fs.File.Kind).@"enum".fields.len);
-        }
-    };
-
-    /// A number that the system uses to point to the file metadata. This
-    /// number is not guaranteed to be unique across time, as some file
-    /// systems may reuse an inode after its file has been deleted. Some
-    /// systems may change the inode of a file over time.
-    ///
-    /// On Linux, the inode is a structure that stores the metadata, and
-    /// the inode _number_ is what you see here: the index number of the
-    /// inode.
-    ///
-    /// The FileIndex on Windows is similar. It is a number for a file that
-    /// is unique to each filesystem.
-    inode: fs.File.INode,
-    size: u64,
-    /// This is available on POSIX systems and is always 0 otherwise.
-    mode: fs.File.Mode,
-    kind: FileKind,
-
-    /// Last access time in nanoseconds, relative to UTC 1970-01-01.
-    atime: i128,
-    /// Last modification time in nanoseconds, relative to UTC 1970-01-01.
-    mtime: i128,
-    /// Last status/metadata change time in nanoseconds, relative to UTC 1970-01-01.
-    ctime: i128,
-
-    pub fn fromStdFsFileStat(s: fs.File.Stat) FileStat {
-        return .{
-            .inode = s.inode,
-            .size = s.size,
-            .mode = s.mode,
-            .kind = @enumFromInt(@as(c_int, @intFromEnum(s.kind))),
-            .atime = s.atime,
-            .mtime = s.mtime,
-            .ctime = s.ctime,
-        };
-    }
+    result: Error!std.fs.File.Stat = undefined,
 };
 
 pub const GetCwd = struct {

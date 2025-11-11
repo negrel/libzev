@@ -158,14 +158,7 @@ pub fn OpPrivateData(T: type) type {
                 .pread => doPRead(op),
                 .pwrite => doPWrite(op),
                 .fsync => doFSync(op),
-                .stat => {
-                    const f: std.fs.File = .{ .handle = op.data.file };
-                    const std_stat = f.stat() catch |err| {
-                        op.data.err_code = @intFromError(err);
-                        return;
-                    };
-                    op.data.stat = .fromStdFsFileStat(std_stat);
-                },
+                .fstat => doFStat(op),
                 .getcwd => {
                     const cwd = std.process.getCwd(
                         op.data.buffer[0..op.data.buffer_len],
@@ -407,7 +400,7 @@ pub const close = io.opInitOf(Io, io.Close);
 pub const pRead = io.opInitOf(Io, io.PRead);
 pub const pWrite = io.opInitOf(Io, io.PWrite);
 pub const fSync = io.opInitOf(Io, io.FSync);
-pub const stat = io.opInitOf(Io, io.Stat);
+pub const fStat = io.opInitOf(Io, io.FStat);
 pub const getCwd = io.opInitOf(Io, io.GetCwd);
 pub const chDir = io.opInitOf(Io, io.ChDir);
 pub const unlinkAt = io.opInitOf(Io, io.UnlinkAt);
@@ -640,6 +633,36 @@ pub fn fsyncErrorFromPosixErrno(rc: anytype) io.FSync.Error!void {
         .ROFS => error.ReadOnlyFileSystem,
         .INVAL => error.InvalidSyscallParameters,
         .DQUOT => error.DiskQuota,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+fn doFStat(op: *Op(io.FStat)) void {
+    const fstat_sym = if (lfs64_abi) system.fstat64 else system.fstat;
+
+    var stat: posix.Stat = undefined;
+    const rc = fstat_sym(op.data.file.handle, &stat);
+    fstatErrorFromPosixErrno(rc) catch |err| {
+        op.data.result = err;
+        return;
+    };
+    op.data.result = .fromPosix(stat);
+}
+
+pub fn fstatErrorFromPosixErrno(rc: anytype) io.FStat.Error!void {
+    return switch (posix.errno(rc)) {
+        .SUCCESS => {},
+        .BADF => error.BadFd,
+        .FAULT => error.BadAddress,
+        // stat/lstat/fstatat only
+        // .INVAL => ...
+        .LOOP => error.SymLinkLoop,
+        .NAMETOOLONG => error.NameTooLong,
+        // stat/lstat/fstatat only
+        // .NOENT => ...
+        .NOMEM => error.OutOfMemory,
+        .NOTDIR => error.NotDir,
+        .OVERFLOW => error.Overflow,
         else => |err| posix.unexpectedErrno(err),
     };
 }
