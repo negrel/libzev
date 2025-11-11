@@ -117,10 +117,11 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
             op.data.buffer,
             @bitCast(op.data.offset),
         ),
-        *Op(io.PWrite) => {
-            const d = op.data;
-            sqe.prep_write(d.file, d.buffer[0..d.buffer_len], d.offset);
-        },
+        *Op(io.PWrite) => sqe.prep_write(
+            op.data.file.handle,
+            op.data.buffer,
+            @bitCast(op.data.offset),
+        ),
         *Op(io.FSync) => {
             sqe.prep_fsync(op.data.file, 0);
         },
@@ -315,32 +316,9 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
         },
         .pwrite => {
             const op = Op(io.PWrite).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .INVAL => error.InvalidArgument,
-                    .SRCH => error.ProcessNotFound,
-                    .AGAIN => error.WouldBlock,
-                    // can be a race condition.
-                    .BADF => error.NotOpenForWriting,
-                    // `connect` was never called.
-                    .DQUOT => error.DiskQuota,
-                    .FBIG => error.FileTooBig,
-                    .IO => error.InputOutput,
-                    .NOSPC => error.NoSpaceLeft,
-                    .ACCES => error.AccessDenied,
-                    .PERM => error.PermissionDenied,
-                    .PIPE => error.BrokenPipe,
-                    .CONNRESET => error.ConnectionResetByPeer,
-                    .BUSY => error.DeviceBusy,
-                    .NXIO => error.NoDevice,
-                    .MSGSIZE => error.MessageTooBig,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            } else {
-                op.data.write = @intCast(cqe.res);
-                op.data.err_code = 0;
-            }
+            op.data.result = ThreadPool.pwriteErrorFromPosixErrno(
+                @as(isize, @intCast(cqe.res)),
+            );
         },
         .fsync => {
             const op = Op(io.FSync).fromHeader(op_h);

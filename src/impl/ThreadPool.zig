@@ -156,17 +156,7 @@ pub fn OpPrivateData(T: type) type {
                 .openat => doOpenat(op),
                 .close => doClose(op),
                 .pread => doPRead(op),
-                .pwrite => {
-                    const d = &op.data;
-                    const f: std.fs.File = .{ .handle = d.file };
-                    d.write = f.pwrite(
-                        d.buffer[0..d.buffer_len],
-                        d.offset,
-                    ) catch |err| {
-                        d.err_code = @intFromError(err);
-                        return;
-                    };
-                },
+                .pwrite => doPWrite(op),
                 .fsync => {
                     const f: std.fs.File = .{ .handle = op.data.file };
                     f.sync() catch |err| {
@@ -518,7 +508,7 @@ pub fn openAtErrorFromPosixErrno(rc: anytype) io.OpenAt.Error!std.fs.File {
         else
             posix.unexpectedErrno(err),
         .INTR => error.SignalInterrupt,
-        .INVAL => error.InvalidArguments,
+        .INVAL => error.InvalidSyscallParameters,
         .ISDIR => error.IsDir,
         .LOOP => error.SymLinkLoop,
         .MFILE => error.ProcessFdQuotaExceeded,
@@ -585,13 +575,57 @@ pub fn preadErrorFromPosixErrno(rc: anytype) io.PRead.Error!usize {
         .BADF => error.BadFd,
         .FAULT => error.ParamsOutsideAccessibleAddressSpace,
         .INTR => error.SignalInterrupt,
-        .INVAL => error.BadFd,
+        .INVAL => error.InvalidSyscallParameters,
         .IO => error.InputOutput,
         .ISDIR => error.IsDir,
         .NXIO => error.InvalidOffset,
         // Should never happen.
-        // .OVERFLOW => error.Overflow,
-        .SPIPE => error.BadFd,
+        .OVERFLOW => error.Overflow,
+        .SPIPE => error.Unseekable,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+fn doPWrite(op: *Op(io.PWrite)) void {
+    var rc: usize = 0;
+    if (op.data.offset == -1) {
+        rc = system.write(
+            op.data.file.handle,
+            op.data.buffer.ptr,
+            op.data.buffer.len,
+        );
+    } else {
+        const pwrite_sym = if (lfs64_abi) system.pwrite64 else system.pwrite;
+        rc = pwrite_sym(
+            op.data.file.handle,
+            op.data.buffer.ptr,
+            op.data.buffer.len,
+            op.data.offset,
+        );
+    }
+
+    op.data.result = pwriteErrorFromPosixErrno(rc);
+}
+
+pub fn pwriteErrorFromPosixErrno(rc: anytype) io.PWrite.Error!usize {
+    return switch (posix.errno(rc)) {
+        .SUCCESS => return @intCast(rc),
+        .AGAIN => error.WouldBlock,
+        .BADF => error.BadFd,
+        // Should never happen, we only write to file.
+        // .DESTADDRREQ => ...
+        .DQUOT => error.DiskQuota,
+        .FAULT => error.ParamsOutsideAccessibleAddressSpace,
+        .FBIG => error.FileTooBig,
+        .INTR => error.SignalInterrupt,
+        .INVAL => error.InvalidSyscallParameters,
+        .IO => error.InputOutput,
+        .NOSPC => error.NoSpaceLeft,
+        .NXIO => error.InvalidOffset,
+        .OVERFLOW => error.Overflow,
+        .PERM => error.PermissionDenied,
+        .PIPE => error.BrokenPipe,
+        .SPIPE => error.Unseekable,
         else => |err| posix.unexpectedErrno(err),
     };
 }

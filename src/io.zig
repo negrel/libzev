@@ -133,7 +133,7 @@ pub const OpenAt = struct {
         FileLocksNotSupported,
         FileNotFound,
         FileTooBig,
-        InvalidArguments,
+        InvalidSyscallParameters,
         InvalidDirFd,
         InvalidUtf8,
         IsDir,
@@ -177,19 +177,18 @@ pub const Close = struct {
     pub const op_code = OpCode.close;
 
     pub const Error = error{
-        // fd isn't a valid open file descriptor.
+        /// fd isn't a valid open file descriptor.
         BadFd,
-        // The user's quota of disk blocks on the filesystem containing the file
-        // referred to by fd has been exhausted.
+        /// The user's quota of disk blocks on the filesystem containing the
+        /// file referred to by fd has been exhausted.
         DiskQuota,
-        // An I/O error occurred.
+        /// An I/O error occurred.
         InputOutput,
-        // No space left.
+        /// No space left.
         NoSpaceLeft,
-        // The close() call was interrupted by a signal.
+        /// The close() call was interrupted by a signal.
         SignalInterrupt,
 
-        // Unexpected error.
         Unexpected,
     };
 
@@ -207,21 +206,17 @@ pub const PRead = struct {
     pub const op_code = OpCode.pread;
 
     pub const Error = error{
-        /// File descriptor is not open or not a file.
         BadFd,
-        /// I/O error.
         InputOutput,
-        /// Offset is beyond end of file.
         InvalidOffset,
-        /// File refers to a directory.
+        InvalidSyscallParameters,
         IsDir,
-        /// Buffer is outside your accessible address space.
+        Overflow,
         ParamsOutsideAccessibleAddressSpace,
-        /// The call was interrupted by a signal before any data was read
         SignalInterrupt,
-        /// File refers to a file opened with O_NONBLOCK and the read would
-        /// block.
+        Unseekable,
         WouldBlock,
+
         Unexpected,
     };
 
@@ -232,38 +227,39 @@ pub const PRead = struct {
     result: Error!usize = undefined,
 };
 
+/// PWrite operation writes up to buffer.len bytes to file at offset `offset`.
+/// The file offset is not changed.
+///
+/// If offset is -1 the offset will use (and advance) the
+/// file position like the read and write system call. This is needed to support
+/// non seekable file such as stdout and stderr.
 pub const PWrite = struct {
     pub const op_code = OpCode.pwrite;
 
-    pub const Error = fs.File.PWriteError;
+    pub const Error = error{
+        BadFd,
+        BrokenPipe,
+        DiskQuota,
+        FileTooBig,
+        InputOutput,
+        InvalidOffset,
+        InvalidSyscallParameters,
+        NoSpaceLeft,
+        Overflow,
+        ParamsOutsideAccessibleAddressSpace,
+        PermissionDenied,
+        SignalInterrupt,
+        Unseekable,
+        WouldBlock,
 
-    pub const Intern = struct {
-        file: fs.File,
-        buffer: []const u8,
-        offset: u64,
-
-        fn toExtern(self: Intern) PWrite {
-            return .{
-                .file = self.file.handle,
-                .buffer = self.buffer.ptr,
-                .buffer_len = self.buffer.len,
-                .offset = self.offset,
-            };
-        }
+        Unexpected,
     };
 
-    file: fs.File.Handle,
-    buffer: [*c]const u8,
-    buffer_len: usize,
-    offset: u64,
+    file: fs.File,
+    buffer: []const u8,
+    offset: isize,
 
-    write: usize = 0,
-    err_code: u16 = 0,
-
-    pub fn result(self: *PWrite) Error!usize {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return self.write;
-    }
+    result: Error!usize = undefined,
 };
 
 pub const FSync = struct {
