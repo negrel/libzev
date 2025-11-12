@@ -34,3 +34,6 @@ pub const WaitPid = io.WaitPid;
 
 pub const OpCode = io.OpCode;
 pub const PollMode = io.PollMode;
+
+pub const QueueError = io.QueueError;
+pub const SubmitError = io.SubmitError;

@@ -107,6 +107,7 @@ pub const TimeOut = struct {
 
     pub const Error = error{
         BadAddress,
+        Canceled,
         SignalInterrupt,
         InvalidSyscallParameters,
         Unexpected,

@@ -13,7 +13,7 @@ pub const Impl = enum {
     /// Returns list of available implementations for current target.
     pub inline fn available() []const Self {
         return switch (builtin.os.tag) {
-            .linux => &.{ .io_uring, .thread_pool },
+            .linux => &.{.thread_pool},
             else => {
                 if (builtin.single_threaded) return &.{};
                 return &.{.thread_pool};

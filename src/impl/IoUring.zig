@@ -64,16 +64,7 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
     switch (@TypeOf(op)) {
         *Op(io.NoOp) => sqe.prep_nop(),
         *Op(io.TimeOut) => {
-            op.private.uring_data = .{
-                .sec = std.math.cast(
-                    i64,
-                    op.data.msec / std.time.ms_per_s,
-                ) orelse std.math.maxInt(i64),
-                .nsec = std.math.cast(
-                    i64,
-                    (op.data.msec % std.time.ms_per_s) * std.time.ns_per_ms,
-                ) orelse std.math.maxInt(i64),
-            };
+            op.private.uring_data = msToTimespec(op.data.msec);
 
             sqe.prep_timeout(
                 &op.private.uring_data,
@@ -285,13 +276,14 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
             const op = Op(io.TimeOut).fromHeader(op_h);
             if (cqe.res < 0) {
                 const rc = errno(cqe.res);
-                if (rc != .TIME)
-                    op.data.result = switch (rc) {
-                        .FAULT => posix.NanoSleepError.BadAddress,
-                        .INVAL => posix.NanoSleepError.InvalidSyscallParameters,
-                        .INTR => posix.NanoSleepError.SignalInterrupt,
-                        else => |err| posix.unexpectedErrno(err),
-                    };
+                op.data.result = switch (rc) {
+                    .SUCCESS, .TIME => undefined, // OK.
+                    .CANCELED => error.Canceled,
+                    .FAULT => error.BadAddress,
+                    .INVAL => error.InvalidSyscallParameters,
+                    .INTR => error.SignalInterrupt,
+                    else => |err| posix.unexpectedErrno(err),
+                };
             }
         },
         .openat => {
@@ -597,3 +589,23 @@ pub const recv = io.opInitOf(Io, io.Recv);
 pub const send = io.opInitOf(Io, io.Send);
 pub const spawn = io.opInitOf(Io, io.Spawn);
 pub const waitPid = io.opInitOf(Io, io.WaitPid);
+
+fn msToTimespec(ms: u64) linux.kernel_timespec {
+    const max: linux.kernel_timespec = .{
+        .sec = std.math.maxInt(isize),
+        .nsec = std.math.maxInt(isize),
+    };
+    const next_s = std.math.cast(isize, ms / std.time.ms_per_s) orelse
+        return max;
+    const next_ns = std.math.cast(
+        isize,
+        (ms % std.time.ms_per_s) * std.time.ns_per_ms,
+    ) orelse return max;
+
+    const now = posix.clock_gettime(posix.CLOCK.MONOTONIC) catch unreachable;
+
+    return .{
+        .sec = std.math.add(isize, now.sec, next_s) catch return max,
+        .nsec = std.math.add(isize, now.nsec, next_ns) catch return max,
+    };
+}

@@ -97,7 +97,8 @@ test "batch of timeout" {
             _ = try testutils.pollAtLeast(&io, timeouts.len, std.time.ns_per_s);
 
             try std.testing.expect(Static.called == timeouts.len);
-            try std.testing.expect(start.read() < std.time.ns_per_s);
+            try std.testing.expect(start.read() < 16 * 5 * std.time.ns_per_ms);
+            try std.testing.expect(start.read() > 5 * std.time.ns_per_ms);
         }
     }.tcase);
 }
