@@ -1,4 +1,5 @@
-//! Thread pool based implementation of Io.
+//! Thread pool based implementation of Io. All operations are supported and
+//! executed on a separate thread in a blocking manner.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -29,7 +30,7 @@ pub fn deinit(self: *Io) void {
     self.tpool.deinit();
 }
 
-pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
+pub fn submit(self: *Io, op: anytype) io.QueueError!void {
     comptime {
         std.debug.assert(
             std.mem.startsWith(u8, @typeName(@TypeOf(op)), "*io.Op("),
@@ -44,22 +45,18 @@ pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
     op.private.task.node = .{};
 
     self.batch.push(ThreadPool.Batch.from(&op.private.task));
-
-    return @intCast(self.batch.len);
-}
-
-pub fn submit(self: *Io) io.SubmitError!u32 {
-    const submitted: u32 = @intCast(self.batch.len);
-
-    self.tpool.schedule(self.batch);
-    self.batch = .{};
-
-    _ = self.active.fetchAdd(submitted, .seq_cst);
-    return @intCast(submitted);
 }
 
 pub fn poll(self: *Io, mode: io.PollMode) !u32 {
     const active = self.active.load(.seq_cst);
+
+    // Don't submit if it will overflow active.
+    if (std.math.add(u32, active, @intCast(self.batch.len)) != error.Overflow) {
+        // Submit batch.
+        _ = self.active.fetchAdd(@intCast(self.batch.len), .seq_cst);
+        self.tpool.schedule(self.batch);
+        self.batch = .{};
+    }
 
     if (active > 0) {
         var i = active;

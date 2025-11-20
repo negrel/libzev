@@ -11,10 +11,6 @@ const ThreadPool = @import("./ThreadPool.zig");
 const Io = @This();
 
 ring: linux.IoUring = undefined,
-// Number of entry submitted to the kernel and not polled (yet).
-active: u32 = 0,
-// Number of entry in the submission queue (but not submitted).
-sqe_len: u32 = 0,
 // Blocking task not supported by io_uring run on the thread pool.
 tpool: ThreadPool = undefined,
 
@@ -24,7 +20,12 @@ pub fn init(self: *Io, opts: Options) !void {
     if (opts.params) |p| self.ring = try linux.IoUring.init_params(
         opts.entries,
         p,
-    ) else self.ring = try linux.IoUring.init(opts.entries, 0);
+    ) else {
+        self.ring = try linux.IoUring.init(
+            opts.entries,
+            linux.IORING_SETUP_SUBMIT_ALL,
+        );
+    }
 
     try self.tpool.init(opts.thread_pool);
 }
@@ -33,38 +34,34 @@ pub fn deinit(self: *Io) void {
     self.ring.deinit();
 }
 
-pub fn queue(self: *Io, op: anytype) io.QueueError!u32 {
+pub fn submit(self: *Io, op: anytype) !void {
     comptime {
         std.debug.assert(
             std.mem.startsWith(u8, @typeName(@TypeOf(op)), "*io.Op("),
         );
     }
 
-    if (self.tpool.batch.len + self.sqe_len + 1 == std.math.maxInt(u32)) {
-        return io.QueueError.SubmissionQueueFull;
-    }
-
     switch (@TypeOf(op)) {
         *Op(io.GetCwd), *Op(io.ChDir), *Op(io.Spawn) => {
-            _ = try self.tpool.queue(op);
+            _ = try self.tpool.submit(op);
         },
-        else => {
-            try self.queueOpHeader(op);
-            self.sqe_len += 1;
-        },
+        else => try self.submitOpHeader(op),
     }
-
-    return self.sqe_len + @as(u32, @intCast(self.tpool.batch.len));
 }
 
-fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
+fn submitOpHeader(self: *Io, op: anytype) !void {
     const sqe = try self.ring.get_sqe();
 
     // Prepare entry.
     switch (@TypeOf(op)) {
         *Op(io.NoOp) => sqe.prep_nop(),
         *Op(io.Sleep) => {
-            op.private.uring_data = msToTimespec(op.data.msec);
+            op.private.uring_data = .{
+                .sec = @intCast(op.data.msec / std.time.ms_per_s),
+                .nsec = @intCast(
+                    (op.data.msec % std.time.ms_per_s) * std.time.ns_per_ms,
+                ),
+            };
 
             sqe.prep_timeout(
                 &op.private.uring_data,
@@ -147,58 +144,42 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
     sqe.user_data = @intFromPtr(&op.header);
 }
 
-pub fn submit(self: *Io) io.SubmitError!u32 {
-    var submitted: u32 = 0;
-    while (true) {
-        submitted += self.ring.submit() catch |err| switch (err) {
-            error.SignalInterrupt => continue,
-            error.SystemResources => return error.SystemResources,
-            error.CompletionQueueOvercommitted => {
-                return error.CompletionQueueOvercommitted;
-            },
-            error.SubmissionQueueEntryInvalid => return error.InvalidOp,
-            error.FileDescriptorInvalid,
-            error.FileDescriptorInBadState,
-            error.BufferInvalid,
-            error.RingShuttingDown,
-            error.OpcodeNotSupported,
-            error.Unexpected,
-            => {
-                return io.SubmitError.Unexpected;
-            },
-        };
-
-        self.sqe_len -= submitted;
-        self.active += submitted;
-        return submitted + try self.tpool.submit();
-    }
-}
-
 pub fn poll(self: *Io, mode: io.PollMode) !u32 {
     var cqes: [256]linux.io_uring_cqe = undefined;
     var done: u32 = 0;
     while (true) {
-        const copied = self.ring.copy_cqes(
-            cqes[0..cqes.len],
+        // Flush SQ.
+        const submitted = self.ring.flush_sq();
+
+        var ready = self.ring.cq_ready();
+        if (ready == 0) ready = submitted;
+
+        _ = self.ring.enter(
+            submitted,
             switch (mode) {
-                .all => @min(self.active, cqes.len),
-                .one => @min(self.active, 1),
+                .all => @min(ready, cqes.len),
+                .one => @min(ready, 1),
                 .nowait => 0,
             },
+            if (ready > 0 and mode != .nowait) linux.IORING_ENTER_GETEVENTS else 0,
         ) catch |err| switch (err) {
             error.SignalInterrupt => continue,
             else => return err,
         };
+
+        const copied = try self.ring.copy_cqes(
+            cqes[0..cqes.len],
+            0, // No wait, don't enter kernel again.
+        );
         done += copied;
 
         for (cqes[0..copied]) |*cqe| {
             self.processCompletion(cqe);
         }
 
-        if (copied < cqes.len) break;
+        // We processed all ready.
+        if (copied >= ready) break;
     }
-
-    self.active -= done;
 
     return done + try self.tpool.poll(switch (mode) {
         .all => .all,
@@ -220,7 +201,6 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
                     .CANCELED => error.Canceled,
                     .FAULT => error.BadAddress,
                     .INVAL => error.InvalidSyscallParameters,
-                    .INTR => error.SignalInterrupt,
                     else => |err| posix.unexpectedErrno(err),
                 };
             }
@@ -370,23 +350,3 @@ pub const chDir = io.opInitOf(Io, io.ChDir);
 pub const unlinkAt = io.opInitOf(Io, io.UnlinkAt);
 pub const spawn = io.opInitOf(Io, io.Spawn);
 pub const waitPid = io.opInitOf(Io, io.WaitPid);
-
-fn msToTimespec(ms: u64) linux.kernel_timespec {
-    const max: linux.kernel_timespec = .{
-        .sec = std.math.maxInt(isize),
-        .nsec = std.math.maxInt(isize),
-    };
-    const next_s = std.math.cast(isize, ms / std.time.ms_per_s) orelse
-        return max;
-    const next_ns = std.math.cast(
-        isize,
-        (ms % std.time.ms_per_s) * std.time.ns_per_ms,
-    ) orelse return max;
-
-    const now = posix.clock_gettime(posix.CLOCK.MONOTONIC) catch unreachable;
-
-    return .{
-        .sec = std.math.add(isize, now.sec, next_s) catch return max,
-        .nsec = std.math.add(isize, now.nsec, next_ns) catch return max,
-    };
-}

@@ -28,8 +28,7 @@ test "single noop" {
             defer io.deinit();
 
             var op: Io.Op(zev.NoOp) = Io.noOp(.{}, null, Static.callback);
-            try testutils.queue(&io, &op, 1);
-            try testutils.submit(&io, 1);
+            try io.submit(&op);
 
             _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
@@ -57,9 +56,8 @@ test "batch of noop" {
 
             for (0..noops.len) |i| {
                 noops[i] = Io.noOp(.{}, null, &Static.callback);
-                try testutils.queue(&io, &noops[i], i + 1);
+                try io.submit(&noops[i]);
             }
-            try testutils.submit(&io, noops.len);
 
             _ = try testutils.pollAtLeast(&io, noops.len, std.time.ns_per_s);
 
@@ -87,11 +85,10 @@ test "batch of sleep" {
 
             for (0..sleeps.len) |i| {
                 sleeps[i] = Io.sleep(.{
-                    .msec = i % 5,
+                    .msec = (i % 5) + 1,
                 }, null, &Static.callback);
-                try testutils.queue(&io, &sleeps[i], i + 1);
+                try io.submit(&sleeps[i]);
             }
-            try testutils.submit(&io, sleeps.len);
 
             var start = try std.time.Timer.start();
             _ = try testutils.pollAtLeast(&io, sleeps.len, std.time.ns_per_s);
@@ -141,8 +138,7 @@ test "openat/pread/close" {
                     .offset = -1,
                 }, null, Static.preadCallback);
 
-                try testutils.queue(&io, &pread, 1);
-                try testutils.submit(&io, 1);
+                try io.submit(&pread);
 
                 _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
@@ -163,8 +159,7 @@ test "openat/pread/close" {
                     .offset = 0,
                 }, null, Static.preadCallback);
 
-                try testutils.queue(&io, &pread, 1);
-                try testutils.submit(&io, 1);
+                try io.submit(&pread);
 
                 _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
@@ -245,8 +240,7 @@ test "openat/pwrite/fsync/close/unlinkat" {
                     .offset = 0,
                 }, null, Static.pwriteCallback);
 
-                try testutils.queue(&io, &pwrite, 1);
-                try testutils.submit(&io, 1);
+                try io.submit(&pwrite);
                 _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
                 try std.testing.expect(Static.pwriteCalled);
@@ -266,8 +260,7 @@ test "openat/pwrite/fsync/close/unlinkat" {
             {
                 var fsync = Io.fSync(.{ .file = f }, null, Static.fsyncCallback);
 
-                try testutils.queue(&io, &fsync, 1);
-                try testutils.submit(&io, 1);
+                try io.submit(&fsync);
                 _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
                 try std.testing.expect(Static.fsyncCalled);
@@ -286,8 +279,7 @@ test "openat/pwrite/fsync/close/unlinkat" {
                     .remove_dir = false,
                 }, null, Static.unlinkAtCallback);
 
-                try testutils.queue(&io, &unlinkAt, 1);
-                try testutils.submit(&io, 1);
+                try io.submit(&unlinkAt);
                 _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
                 try std.testing.expect(Static.unlinkAtCalled);
@@ -329,8 +321,7 @@ test "openat/stat/close" {
             {
                 var stat = Io.fStat(.{ .file = f }, null, Static.statCallback);
 
-                try testutils.queue(&io, &stat, 1);
-                try testutils.submit(&io, 1);
+                try io.submit(&stat);
                 _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
                 const s = try Static.stat;
@@ -374,8 +365,7 @@ test "getcwd" {
                 .buffer = buffer[0..],
             }, null, Static.getCwdCallback);
 
-            try testutils.queue(&io, &getcwd, 1);
-            try testutils.submit(&io, 1);
+            try io.submit(&getcwd);
             _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
             try std.testing.expect(Static.callbackCalled);
@@ -414,8 +404,7 @@ test "chdir" {
 
             var chdir = Io.chDir(.{ .path = ".." }, null, Static.chdirCallback);
 
-            try testutils.queue(&io, &chdir, 1);
-            try testutils.submit(&io, 1);
+            try io.submit(&chdir);
             _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
             try Static.result;
@@ -474,8 +463,7 @@ test "spawn/wait" {
                     .stderr = .ignore,
                 }, null, Static.spawnCallback);
 
-                try testutils.queue(&io, &spawn, 1);
-                try testutils.submit(&io, 1);
+                try io.submit(&spawn);
                 _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
                 try std.testing.expect(Static.spawnCalled);
@@ -489,8 +477,7 @@ test "spawn/wait" {
                     .pid = pid,
                 }, null, Static.waitPidCallback);
 
-                try testutils.queue(&io, &waitpid, 1);
-                try testutils.submit(&io, 1);
+                try io.submit(&waitpid);
                 _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
 
                 try std.testing.expect(Static.waitPidCalled);
@@ -505,16 +492,6 @@ test "spawn/wait" {
 const testutils = struct {
     fn Deref(T: type) type {
         return @typeInfo(T).pointer.child;
-    }
-
-    fn queue(io: anytype, op: anytype, queued: usize) !void {
-        const actual = try io.queue(op);
-        try std.testing.expectEqual(queued, actual);
-    }
-
-    fn submit(io: anytype, submitted: usize) !void {
-        const actual = try io.submit();
-        try std.testing.expectEqual(submitted, actual);
     }
 
     fn pollAtLeast(
@@ -551,8 +528,7 @@ const testutils = struct {
 
         var op = Io.openAt(data, null, Static.openAtCallback);
 
-        _ = try io.queue(&op);
-        _ = try io.submit();
+        _ = try io.submit(&op);
         _ = try pollAtLeast(io, 1, std.time.ns_per_s);
 
         try std.testing.expect(Static.callbackCalled);
@@ -579,8 +555,7 @@ const testutils = struct {
 
         var op = Io.close(data, null, Static.closeCallback);
 
-        _ = try io.queue(&op);
-        _ = try io.submit();
+        _ = try io.submit(&op);
         _ = try pollAtLeast(io, 1, std.time.ns_per_s);
 
         try std.testing.expect(Static.callbackCalled);
