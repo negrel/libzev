@@ -7,6 +7,7 @@ pub const ThreadPool = @import("./ThreadPool.zig");
 
 pub const Impl = impl.Impl;
 pub const Io = Impl.default().Io();
+pub const Overlay = @import("./impl/overlay.zig").Overlay;
 
 // io.Op(...)
 pub const NoOp = io.NoOp;

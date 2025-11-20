@@ -35,16 +35,10 @@ pub fn deinit(self: *Io) void {
 }
 
 /// Supports returns whether given operation is supported.
-pub fn supports(OpPtr: type) bool {
-    comptime {
-        std.debug.assert(
-            std.mem.startsWith(u8, @typeName(OpPtr), "*io.Op("),
-        );
-    }
-
-    return switch (OpPtr) {
+pub fn supports(IoOp: type) bool {
+    return switch (IoOp) {
         *Op(io.GetCwd), *Op(io.ChDir), *Op(io.Spawn) => false,
-        else => true,
+        else => std.mem.startsWith(u8, @typeName(IoOp), "*io.Op(impl.IoUring"),
     };
 }
 

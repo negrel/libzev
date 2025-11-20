@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 
 const IoUring = @import("./impl/IoUring.zig");
 const ThreadPool = @import("./impl/ThreadPool.zig");
+const Overlay = @import("./impl/overlay.zig").Overlay;
 
 /// Impl enumerates existing implementation of Io.
 pub const Impl = enum {
@@ -32,7 +33,7 @@ pub const Impl = enum {
     /// Returns Io type associated to this implementation.
     pub inline fn Io(comptime self: Self) type {
         return switch (self) {
-            .io_uring => IoUring,
+            .io_uring => Overlay(IoUring, ThreadPool),
             .thread_pool => ThreadPool,
         };
     }

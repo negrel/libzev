@@ -26,3 +26,8 @@ pub fn canPtrCast(From: type, To: type) void {
         }
     }
 }
+
+/// Returns T.*.
+pub fn Deref(T: type) type {
+    return @typeInfo(T).pointer.child;
+}

@@ -30,6 +30,10 @@ pub fn deinit(self: *Io) void {
     self.tpool.deinit();
 }
 
+pub fn supports(_: anytype) bool {
+    return true;
+}
+
 pub fn submit(self: *Io, op: anytype) io.QueueError!void {
     comptime {
         std.debug.assert(

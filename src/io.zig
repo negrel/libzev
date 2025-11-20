@@ -54,6 +54,7 @@ pub const OpHeader = struct {
 pub fn Op(Io: type, T: type) type {
     return struct {
         const Impl = Io;
+        pub const Data = T;
 
         header: OpHeader,
 
@@ -61,7 +62,7 @@ pub fn Op(Io: type, T: type) type {
         private: Impl.OpPrivateData(T),
 
         // Operation data.
-        data: T,
+        data: Data,
 
         pub fn fromHeader(h: *OpHeader) *Op(Io, T) {
             std.debug.assert(h.code == T.op_code);
@@ -471,14 +472,14 @@ pub fn OpConstructor(Io: type, T: type) type {
         return *const fn (
             T.Intern,
             user_data: ?*anyopaque,
-            comptime callback: *const fn (*Io, *Op(Io, T)) void,
-        ) Op(Io, T);
+            comptime callback: *const fn (*Io, *Io.Op(T)) void,
+        ) Io.Op(T);
     } else {
         return *const fn (
             T,
             user_data: ?*anyopaque,
-            comptime callback: *const fn (*Io, *Op(Io, T)) void,
-        ) Op(Io, T);
+            comptime callback: *const fn (*Io, *Io.Op(T)) void,
+        ) Io.Op(T);
     }
 }
 

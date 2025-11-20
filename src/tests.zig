@@ -1,6 +1,9 @@
 const std = @import("std");
 const zev = @import("./root.zig");
 
+const computils = @import("./computils.zig");
+const Deref = computils.Deref;
+
 fn forEachAvailableImpl(tcase: anytype) !void {
     inline for (zev.Impl.available()) |i| {
         const ImplIo = i.Io();
@@ -500,10 +503,6 @@ test "spawn/wait" {
 }
 
 const testutils = struct {
-    fn Deref(T: type) type {
-        return @typeInfo(T).pointer.child;
-    }
-
     fn pollAtLeast(
         io: anytype,
         completed: usize,
