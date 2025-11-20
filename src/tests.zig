@@ -68,12 +68,12 @@ test "batch of noop" {
     }.tcase);
 }
 
-test "batch of timeout" {
+test "batch of sleep" {
     try forEachAvailableImpl(struct {
         fn tcase(Io: type) !void {
             const Static = struct {
                 var called: usize = undefined;
-                fn callback(_: *Io, _: *Io.Op(zev.TimeOut)) void {
+                fn callback(_: *Io, _: *Io.Op(zev.Sleep)) void {
                     called += 1;
                 }
             };
@@ -83,20 +83,20 @@ test "batch of timeout" {
             try io.init(.{});
             defer io.deinit();
 
-            var timeouts: [16]Io.Op(zev.TimeOut) = undefined;
+            var sleeps: [16]Io.Op(zev.Sleep) = undefined;
 
-            for (0..timeouts.len) |i| {
-                timeouts[i] = Io.timeOut(.{
+            for (0..sleeps.len) |i| {
+                sleeps[i] = Io.sleep(.{
                     .msec = i % 5,
                 }, null, &Static.callback);
-                try testutils.queue(&io, &timeouts[i], i + 1);
+                try testutils.queue(&io, &sleeps[i], i + 1);
             }
-            try testutils.submit(&io, timeouts.len);
+            try testutils.submit(&io, sleeps.len);
 
             var start = try std.time.Timer.start();
-            _ = try testutils.pollAtLeast(&io, timeouts.len, std.time.ns_per_s);
+            _ = try testutils.pollAtLeast(&io, sleeps.len, std.time.ns_per_s);
 
-            try std.testing.expect(Static.called == timeouts.len);
+            try std.testing.expect(Static.called == sleeps.len);
             try std.testing.expect(start.read() < 16 * 5 * std.time.ns_per_ms);
             try std.testing.expect(start.read() > 5 * std.time.ns_per_ms);
         }

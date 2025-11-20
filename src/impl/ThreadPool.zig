@@ -144,13 +144,13 @@ pub fn OpPrivateData(T: type) type {
             const op = self.toOp();
             switch (T.op_code) {
                 .noop => {},
-                .timeout => {
+                .sleep => {
                     if (builtin.os.tag == .windows) {
                         std.Thread.sleep(
                             self.toOp().data.ms * std.time.ns_per_ms,
                         );
                     } else {
-                        doTimeout(op);
+                        doSleep(op);
                     }
                 },
                 .openat => doOpenat(op),
@@ -313,7 +313,7 @@ pub fn posixSpawn(data: *io.Spawn) anyerror!std.posix.pid_t {
 }
 
 pub const noOp = io.opInitOf(Io, io.NoOp);
-pub const timeOut = io.opInitOf(Io, io.Sleep);
+pub const sleep = io.opInitOf(Io, io.Sleep);
 pub const openAt = io.opInitOf(Io, io.OpenAt);
 pub const close = io.opInitOf(Io, io.Close);
 pub const pRead = io.opInitOf(Io, io.PRead);
@@ -330,8 +330,8 @@ const lfs64_abi = builtin.os.tag == .linux and
     builtin.link_libc and
     (builtin.abi.isGnu() or builtin.abi.isAndroid());
 
-fn doTimeout(op: *Op(io.Sleep)) void {
-    const req: posix.system.timespec = .{
+fn doSleep(op: *Op(io.Sleep)) void {
+    var req: posix.system.timespec = .{
         .sec = std.math.cast(i64, op.data.msec / std.time.ms_per_s) orelse
             std.math.maxInt(i64),
         .nsec = std.math.cast(
@@ -341,18 +341,19 @@ fn doTimeout(op: *Op(io.Sleep)) void {
     };
     var rem: posix.system.timespec = .{ .sec = 0, .nsec = 0 };
 
-    op.data.result = switch (posix.errno(posix.system.nanosleep(&req, &rem))) {
-        .SUCCESS => undefined,
-        .FAULT => error.BadAddress,
-        .INVAL => error.InvalidSyscallParameters,
-        .INTR => E: {
-            op.data.remaining_msec = @as(usize, @intCast(rem.nsec)) *
-                std.time.ms_per_s +
-                @as(usize, @intCast(rem.nsec)) / std.time.ns_per_ms;
-            break :E error.SignalInterrupt;
-        },
-        else => |err| std.posix.unexpectedErrno(err),
-    };
+    while (true) {
+        op.data.result = switch (posix.errno(posix.system.nanosleep(&req, &rem))) {
+            .SUCCESS => undefined,
+            .FAULT => error.BadAddress,
+            .INVAL => error.InvalidSyscallParameters,
+            .INTR => {
+                req = rem;
+                continue;
+            },
+            else => |err| std.posix.unexpectedErrno(err),
+        };
+        return;
+    }
 }
 
 fn doOpenat(op: *Op(io.OpenAt)) void {

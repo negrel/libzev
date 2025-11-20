@@ -9,7 +9,7 @@ const posix = @import("./posix.zig");
 /// OpCode enumerates all supported I/O operation.
 pub const OpCode = enum {
     noop,
-    timeout,
+    sleep,
     openat,
     close,
     pread,
@@ -25,7 +25,7 @@ pub const OpCode = enum {
     pub fn Data(self: @This()) type {
         return switch (self) {
             .noop => NoOp,
-            .timeout => TimeOut,
+            .sleep => Sleep,
             .openat => OpenAt,
             .close => Close,
             .pread => PRead,
@@ -84,28 +84,18 @@ pub const NoOp = struct {
 /// Linux:
 /// If timer is interrupted, `remaining_msec` can be used to setup another
 /// TimeOut operation and complete the specified pause.
-pub const TimeOut = struct {
-    pub const op_code = OpCode.timeout;
-
-    /// Instant defines a point in time relative to 1st january 1970.
-    pub const Instant = struct {
-        sec: usize = 0,
-        /// An integer between 0 and 999 999 999.
-        nsec: u19 = 0,
-    };
+pub const Sleep = struct {
+    pub const op_code = OpCode.sleep;
 
     pub const Error = error{
         BadAddress,
         Canceled,
-        SignalInterrupt,
         InvalidSyscallParameters,
         Unexpected,
     };
 
-    instant: Instant,
+    msec: usize,
 
-    /// Remaining time if I/O operation was interrupted by a signal.
-    remaining: Instant = .{},
     result: Error!void = undefined,
 };
 

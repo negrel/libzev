@@ -63,13 +63,13 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
     // Prepare entry.
     switch (@TypeOf(op)) {
         *Op(io.NoOp) => sqe.prep_nop(),
-        *Op(io.TimeOut) => {
+        *Op(io.Sleep) => {
             op.private.uring_data = msToTimespec(op.data.msec);
 
             sqe.prep_timeout(
                 &op.private.uring_data,
                 1,
-                linux.IORING_TIMEOUT_ABS | linux.IORING_TIMEOUT_ETIME_SUCCESS,
+                linux.IORING_TIMEOUT_ETIME_SUCCESS,
             );
         },
         *Op(io.OpenAt) => {
@@ -211,8 +211,8 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
     const op_h: *io.OpHeader = @ptrFromInt(cqe.user_data);
     switch (op_h.code) {
         .noop => {},
-        .timeout => {
-            const op = Op(io.TimeOut).fromHeader(op_h);
+        .sleep => {
+            const op = Op(io.Sleep).fromHeader(op_h);
             if (cqe.res < 0) {
                 const rc = errno(cqe.res);
                 op.data.result = switch (rc) {
@@ -330,7 +330,7 @@ pub fn Op(T: type) type {
 
 /// I/O operation data specific to this ThreadPool.
 pub fn OpPrivateData(T: type) type {
-    const UringData = if (T == io.TimeOut) T: {
+    const UringData = if (T == io.Sleep) T: {
         break :T linux.kernel_timespec;
     } else if (T == io.OpenAt) T: {
         break :T [std.posix.PATH_MAX - 1:0]u8;
@@ -358,7 +358,7 @@ pub fn OpPrivateData(T: type) type {
 }
 
 pub const noOp = io.opInitOf(Io, io.NoOp);
-pub const timeOut = io.opInitOf(Io, io.TimeOut);
+pub const sleep = io.opInitOf(Io, io.Sleep);
 pub const openAt = io.opInitOf(Io, io.OpenAt);
 pub const close = io.opInitOf(Io, io.Close);
 pub const pRead = io.opInitOf(Io, io.PRead);

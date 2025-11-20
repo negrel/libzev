@@ -10,7 +10,7 @@ pub const Io = Impl.default().Io();
 
 // io.Op(...)
 pub const NoOp = io.NoOp;
-pub const TimeOut = io.TimeOut;
+pub const Sleep = io.Sleep;
 pub const OpenAt = io.OpenAt;
 pub const Close = io.Close;
 pub const PRead = io.PRead;
