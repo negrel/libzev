@@ -5,6 +5,16 @@ fn forEachAvailableImpl(tcase: anytype) !void {
     inline for (zev.Impl.available()) |i| {
         const ImplIo = i.Io();
         @call(.auto, tcase, .{ImplIo}) catch |err| {
+            switch (err) {
+                error.UnsupportedOp => {
+                    // ThreadPool backend MUST support all I/O operations.
+                    if (ImplIo != zev.Impl.thread_pool.Io()) {
+                        return;
+                    }
+                },
+                else => {},
+            }
+
             std.debug.print("\nIo={s} error={s}\n\n", .{ @typeName(ImplIo), @errorName(err) });
             return err;
         };
@@ -13,7 +23,7 @@ fn forEachAvailableImpl(tcase: anytype) !void {
 
 test "single noop" {
     try forEachAvailableImpl(struct {
-        fn tcase(Io: type) !void {
+        fn tcase(Io: type) anyerror!void {
             const Static = struct {
                 var called: bool = undefined;
 
@@ -39,7 +49,7 @@ test "single noop" {
 
 test "batch of noop" {
     try forEachAvailableImpl(struct {
-        fn tcase(Io: type) !void {
+        fn tcase(Io: type) anyerror!void {
             const Static = struct {
                 var called: usize = undefined;
                 fn callback(_: *Io, _: *Io.Op(zev.NoOp)) void {
@@ -68,7 +78,7 @@ test "batch of noop" {
 
 test "batch of sleep" {
     try forEachAvailableImpl(struct {
-        fn tcase(Io: type) !void {
+        fn tcase(Io: type) anyerror!void {
             const Static = struct {
                 var called: usize = undefined;
                 fn callback(_: *Io, _: *Io.Op(zev.Sleep)) void {
@@ -102,7 +112,7 @@ test "batch of sleep" {
 
 test "openat/pread/close" {
     try forEachAvailableImpl(struct {
-        fn tcase(Io: type) !void {
+        fn tcase(Io: type) anyerror!void {
             const Static = struct {
                 var preadCalled: bool = undefined;
                 var read: zev.PRead.Error!usize = undefined;
@@ -179,7 +189,7 @@ test "openat/pread/close" {
 
 test "openat/pwrite/fsync/close/unlinkat" {
     try forEachAvailableImpl(struct {
-        fn tcase(Io: type) !void {
+        fn tcase(Io: type) anyerror!void {
             const Static = struct {
                 var pwriteCalled: bool = undefined;
                 var fsyncCalled: bool = undefined;
@@ -292,7 +302,7 @@ test "openat/pwrite/fsync/close/unlinkat" {
 
 test "openat/stat/close" {
     try forEachAvailableImpl(struct {
-        fn tcase(Io: type) !void {
+        fn tcase(Io: type) anyerror!void {
             const Static = struct {
                 var statCalled: bool = undefined;
                 var stat: zev.FStat.Error!zev.FStat.Stat = undefined;
@@ -342,7 +352,7 @@ test "openat/stat/close" {
 
 test "getcwd" {
     try forEachAvailableImpl(struct {
-        fn tcase(Io: type) !void {
+        fn tcase(Io: type) anyerror!void {
             const Static = struct {
                 var callbackCalled: bool = undefined;
                 var cwd: zev.GetCwd.Error![]u8 = undefined;
@@ -382,7 +392,7 @@ test "getcwd" {
 
 test "chdir" {
     try forEachAvailableImpl(struct {
-        fn tcase(Io: type) !void {
+        fn tcase(Io: type) anyerror!void {
             const Static = struct {
                 var callbackCalled: bool = undefined;
                 var result: std.posix.ChangeCurDirError!void = undefined;
@@ -421,7 +431,7 @@ test "chdir" {
 
 test "spawn/wait" {
     try forEachAvailableImpl(struct {
-        fn tcase(Io: type) !void {
+        fn tcase(Io: type) anyerror!void {
             const Static = struct {
                 var spawnCalled: bool = undefined;
                 var waitPidCalled: bool = undefined;

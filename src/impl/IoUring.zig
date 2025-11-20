@@ -34,19 +34,29 @@ pub fn deinit(self: *Io) void {
     self.ring.deinit();
 }
 
-pub fn submit(self: *Io, op: anytype) !void {
+/// Supports returns whether given operation is supported.
+pub fn supports(OpPtr: type) bool {
+    comptime {
+        std.debug.assert(
+            std.mem.startsWith(u8, @typeName(OpPtr), "*io.Op("),
+        );
+    }
+
+    return switch (OpPtr) {
+        *Op(io.GetCwd), *Op(io.ChDir), *Op(io.Spawn) => false,
+        else => true,
+    };
+}
+
+pub fn submit(self: *Io, op: anytype) (error{UnsupportedOp} || anyerror)!void {
     comptime {
         std.debug.assert(
             std.mem.startsWith(u8, @typeName(@TypeOf(op)), "*io.Op("),
         );
     }
 
-    switch (@TypeOf(op)) {
-        *Op(io.GetCwd), *Op(io.ChDir), *Op(io.Spawn) => {
-            _ = try self.tpool.submit(op);
-        },
-        else => try self.submitOpHeader(op),
-    }
+    if (!Io.supports(@TypeOf(op))) return error.UnsupportedOp;
+    try self.submitOpHeader(op);
 }
 
 fn submitOpHeader(self: *Io, op: anytype) !void {
@@ -161,7 +171,10 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
                 .one => @min(ready, 1),
                 .nowait => 0,
             },
-            if (ready > 0 and mode != .nowait) linux.IORING_ENTER_GETEVENTS else 0,
+            if (ready > 0 and mode != .nowait)
+                linux.IORING_ENTER_GETEVENTS
+            else
+                0,
         ) catch |err| switch (err) {
             error.SignalInterrupt => continue,
             else => return err,
@@ -316,12 +329,6 @@ pub fn OpPrivateData(T: type) type {
         break :T [std.posix.PATH_MAX - 1:0]u8;
     } else if (T == io.FStat) T: {
         break :T linux.Statx;
-    } else if (T == io.GetCwd) {
-        return ThreadPool.OpPrivateData(T);
-    } else if (T == io.ChDir) {
-        return ThreadPool.OpPrivateData(T);
-    } else if (T == io.Spawn) {
-        return ThreadPool.OpPrivateData(T);
     } else if (T == io.WaitPid) T: {
         break :T linux.siginfo_t;
     } else void;
