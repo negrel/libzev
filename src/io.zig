@@ -19,15 +19,6 @@ pub const OpCode = enum {
     getcwd,
     chdir,
     unlinkat,
-    socket,
-    bind,
-    listen,
-    accept,
-    connect,
-    shutdown,
-    closesocket,
-    recv,
-    send,
     spawn,
     waitpid,
 
@@ -44,15 +35,6 @@ pub const OpCode = enum {
             .getcwd => GetCwd,
             .chdir => ChDir,
             .unlinkat => UnlinkAt,
-            .socket => Socket,
-            .bind => Bind,
-            .listen => Listen,
-            .accept => Accept,
-            .connect => Connect,
-            .shutdown => Shutdown,
-            .closesocket => CloseSocket,
-            .recv => Recv,
-            .send => Send,
             .spawn => Spawn,
             .waitpid => WaitPid,
         };
@@ -94,7 +76,7 @@ pub const NoOp = struct {
     pub const op_code = OpCode.noop;
 };
 
-/// TimeOut operation complete after `msec` milliseconds passed.
+/// TimeOut operation complete at specified time.
 ///
 /// Windows:
 /// `remaining_msec` is not used.
@@ -105,17 +87,25 @@ pub const NoOp = struct {
 pub const TimeOut = struct {
     pub const op_code = OpCode.timeout;
 
+    /// Instant defines a point in time relative to 1st january 1970.
+    pub const Instant = struct {
+        sec: usize = 0,
+        /// An integer between 0 and 999 999 999.
+        nsec: u19 = 0,
+    };
+
     pub const Error = error{
         BadAddress,
+        Canceled,
         SignalInterrupt,
         InvalidSyscallParameters,
         Unexpected,
     };
 
-    msec: usize,
+    instant: Instant,
 
-    // Remaining time if I/O operation was interrupted by a signal.
-    remaining_msec: usize = 0,
+    /// Remaining time if I/O operation was interrupted by a signal.
+    remaining: Instant = .{},
     result: Error!void = undefined,
 };
 
@@ -384,205 +374,6 @@ pub const UnlinkAt = struct {
     }
 };
 
-pub const Socket = struct {
-    pub const op_code = OpCode.socket;
-
-    pub const Error = std.posix.SocketError;
-
-    pub const Domain = enum(u32) {
-        Inet = std.posix.AF.INET,
-        Inet6 = std.posix.AF.INET6,
-    };
-
-    pub const Type = enum(u32) {
-        Stream = std.posix.SOCK.STREAM,
-        Datagram = std.posix.SOCK.DGRAM,
-        Raw = std.posix.SOCK.RAW,
-    };
-
-    pub const Protocol = enum(u32) {
-        Ip = std.posix.IPPROTO.IP,
-        IpV6 = std.posix.IPPROTO.IPV6,
-        Tcp = std.posix.IPPROTO.TCP,
-        Udp = std.posix.IPPROTO.UDP,
-        Icmp = std.posix.IPPROTO.ICMP,
-        IcmpV6 = std.posix.IPPROTO.ICMPV6,
-    };
-
-    domain: Domain,
-    socket_type: Type,
-    protocol: Protocol,
-
-    socket: std.posix.socket_t = undefined,
-    err_code: u16 = 0,
-
-    pub fn result(self: *Socket) Error!std.posix.socket_t {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return self.socket;
-    }
-};
-
-pub const Bind = struct {
-    pub const op_code = OpCode.bind;
-
-    pub const Error = std.posix.BindError;
-
-    socket: std.posix.socket_t,
-    address: *std.posix.sockaddr,
-    address_len: std.posix.socklen_t,
-
-    err_code: u16 = 0,
-
-    pub fn result(self: *Bind) Error!void {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-    }
-};
-
-pub const Listen = struct {
-    pub const op_code = OpCode.listen;
-
-    pub const Error = std.posix.ListenError;
-
-    socket: std.posix.socket_t,
-    backlog: u32,
-
-    err_code: u16 = 0,
-
-    pub fn result(self: *Listen) Error!void {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-    }
-};
-
-pub const Accept = struct {
-    pub const op_code = OpCode.accept;
-
-    pub const Error = std.posix.AcceptError;
-
-    socket: std.posix.socket_t,
-    address: ?*std.posix.sockaddr,
-    address_len: ?*std.posix.socklen_t,
-    flags: u32,
-
-    accepted_socket: std.posix.socket_t = undefined,
-    err_code: u16 = 0,
-
-    pub fn result(self: *Accept) Error!std.posix.socket_t {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return self.accepted_socket;
-    }
-};
-
-pub const Connect = struct {
-    pub const op_code = OpCode.connect;
-
-    pub const Error = std.posix.ConnectError;
-
-    socket: std.posix.socket_t,
-    address: *std.posix.sockaddr,
-    address_len: std.posix.socklen_t,
-
-    err_code: u16 = 0,
-
-    pub fn result(self: *Connect) Error!void {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-    }
-};
-
-pub const Shutdown = struct {
-    pub const op_code = OpCode.shutdown;
-
-    pub const Error = std.posix.ShutdownError;
-
-    pub const How = enum(u32) {
-        recv,
-        send,
-        both,
-    };
-
-    socket: std.posix.socket_t,
-    how: How,
-
-    err_code: u16 = 0,
-
-    pub fn result(self: *Shutdown) Error!void {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-    }
-};
-
-pub const CloseSocket = struct {
-    pub const op_code = OpCode.closesocket;
-
-    socket: std.posix.socket_t,
-};
-
-pub const Recv = struct {
-    pub const op_code = OpCode.recv;
-
-    pub const Error = std.posix.RecvFromError;
-
-    pub const Intern = struct {
-        socket: std.posix.socket_t,
-        buffer: []u8,
-        flags: u32,
-
-        pub fn toExtern(self: Intern) Recv {
-            return .{
-                .socket = self.socket,
-                .buffer = self.buffer.ptr,
-                .buffer_len = self.buffer.len,
-                .flags = self.flags,
-            };
-        }
-    };
-
-    socket: std.posix.socket_t,
-    buffer: [*c]u8,
-    buffer_len: usize,
-    flags: u32,
-
-    recv: usize = undefined,
-    err_code: u16 = 0,
-
-    pub fn result(self: *Recv) Error!usize {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return self.recv;
-    }
-};
-
-pub const Send = struct {
-    pub const op_code = OpCode.send;
-
-    pub const Error = std.posix.SendError;
-
-    pub const Intern = struct {
-        socket: std.posix.socket_t,
-        buffer: []const u8,
-        flags: u32,
-
-        pub fn toExtern(self: Intern) Send {
-            return .{
-                .socket = self.socket,
-                .buffer = self.buffer.ptr,
-                .buffer_len = self.buffer.len,
-                .flags = self.flags,
-            };
-        }
-    };
-
-    socket: std.posix.socket_t,
-    buffer: [*c]const u8,
-    buffer_len: usize,
-    flags: u32,
-
-    send: usize = undefined,
-    err_code: u16 = 0,
-
-    pub fn result(self: *Send) Error!usize {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return self.send;
-    }
-};
-
 pub const Spawn = struct {
     pub const op_code = OpCode.spawn;
 
@@ -701,7 +492,10 @@ pub fn OpConstructor(Io: type, T: type) type {
     }
 }
 
-pub const QueueError = error{SubmissionQueueFull};
+pub const QueueError = error{
+    /// Queue is full.
+    SubmissionQueueFull,
+};
 
 pub const SubmitError = error{
     // The kernel was unable to allocate memory or ran out of resources for the

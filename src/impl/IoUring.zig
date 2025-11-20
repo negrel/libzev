@@ -64,16 +64,7 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
     switch (@TypeOf(op)) {
         *Op(io.NoOp) => sqe.prep_nop(),
         *Op(io.TimeOut) => {
-            op.private.uring_data = .{
-                .sec = std.math.cast(
-                    i64,
-                    op.data.msec / std.time.ms_per_s,
-                ) orelse std.math.maxInt(i64),
-                .nsec = std.math.cast(
-                    i64,
-                    (op.data.msec % std.time.ms_per_s) * std.time.ns_per_ms,
-                ) orelse std.math.maxInt(i64),
-            };
+            op.private.uring_data = msToTimespec(op.data.msec);
 
             sqe.prep_timeout(
                 &op.private.uring_data,
@@ -139,67 +130,6 @@ fn queueOpHeader(self: *Io, op: anytype) io.QueueError!void {
                 op.data.dir,
                 op.data.path,
                 if (op.data.remove_dir) posix.AT.REMOVEDIR else 0,
-            );
-        },
-        *Op(io.Socket) => {
-            sqe.prep_socket(
-                @intFromEnum(op.data.domain),
-                @intFromEnum(op.data.socket_type),
-                @intFromEnum(op.data.protocol),
-                0,
-            );
-        },
-        *Op(io.Bind) => {
-            sqe.prep_bind(
-                op.data.socket,
-                op.data.address,
-                op.data.address_len,
-                0,
-            );
-        },
-        *Op(io.Listen) => {
-            sqe.prep_listen(
-                op.data.socket,
-                op.data.backlog,
-                0,
-            );
-        },
-        *Op(io.Accept) => {
-            sqe.prep_accept(
-                op.data.socket,
-                op.data.address,
-                op.data.address_len,
-                0,
-            );
-        },
-        *Op(io.Connect) => {
-            sqe.prep_connect(
-                op.data.socket,
-                op.data.address,
-                op.data.address_len,
-            );
-        },
-        *Op(io.Shutdown) => {
-            sqe.prep_shutdown(
-                op.data.socket,
-                @intFromEnum(op.data.how),
-            );
-        },
-        *Op(io.CloseSocket) => {
-            sqe.prep_close(op.data.socket);
-        },
-        *Op(io.Recv) => {
-            sqe.prep_recv(
-                op.data.socket,
-                op.data.buffer[0..op.data.buffer_len],
-                op.data.flags,
-            );
-        },
-        *Op(io.Send) => {
-            sqe.prep_send(
-                op.data.socket,
-                op.data.buffer[0..op.data.buffer_len],
-                op.data.flags,
             );
         },
         *Op(io.Spawn) => unreachable,
@@ -285,13 +215,14 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
             const op = Op(io.TimeOut).fromHeader(op_h);
             if (cqe.res < 0) {
                 const rc = errno(cqe.res);
-                if (rc != .TIME)
-                    op.data.result = switch (rc) {
-                        .FAULT => posix.NanoSleepError.BadAddress,
-                        .INVAL => posix.NanoSleepError.InvalidSyscallParameters,
-                        .INTR => posix.NanoSleepError.SignalInterrupt,
-                        else => |err| posix.unexpectedErrno(err),
-                    };
+                op.data.result = switch (rc) {
+                    .SUCCESS, .TIME => undefined, // OK.
+                    .CANCELED => error.Canceled,
+                    .FAULT => error.BadAddress,
+                    .INVAL => error.InvalidSyscallParameters,
+                    .INTR => error.SignalInterrupt,
+                    else => |err| posix.unexpectedErrno(err),
+                };
             }
         },
         .openat => {
@@ -365,155 +296,6 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
                 });
             }
         },
-        .socket => {
-            const op = Op(io.Socket).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .ACCES => error.AccessDenied,
-                    .AFNOSUPPORT => error.AddressFamilyNotSupported,
-                    .INVAL => error.ProtocolFamilyNotAvailable,
-                    .MFILE => error.ProcessFdQuotaExceeded,
-                    .NFILE => error.SystemFdQuotaExceeded,
-                    .NOBUFS => error.SystemResources,
-                    .NOMEM => error.SystemResources,
-                    .PROTONOSUPPORT => error.ProtocolNotSupported,
-                    .PROTOTYPE => error.SocketTypeNotSupported,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            } else {
-                op.data.socket = cqe.res;
-            }
-        },
-        .bind => {
-            const op = Op(io.Bind).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .ACCES, .PERM => error.AccessDenied,
-                    .ADDRINUSE => error.AddressInUse,
-                    .AFNOSUPPORT => error.AddressFamilyNotSupported,
-                    .ADDRNOTAVAIL => error.AddressNotAvailable,
-                    .LOOP => error.SymLinkLoop,
-                    .NAMETOOLONG => error.NameTooLong,
-                    .NOENT => error.FileNotFound,
-                    .NOMEM => error.SystemResources,
-                    .NOTDIR => error.NotDir,
-                    .ROFS => error.ReadOnlyFileSystem,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            }
-        },
-        .listen => {
-            const op = Op(io.Listen).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .ADDRINUSE => error.AddressInUse,
-                    .NOTSOCK => error.FileDescriptorNotASocket,
-                    .OPNOTSUPP => error.OperationNotSupported,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            }
-        },
-        .accept => {
-            const op = Op(io.Accept).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .AGAIN => error.WouldBlock,
-                    .CONNABORTED => error.ConnectionAborted,
-                    .INVAL => error.SocketNotListening,
-                    .MFILE => error.ProcessFdQuotaExceeded,
-                    .NFILE => error.SystemFdQuotaExceeded,
-                    .NOBUFS => error.SystemResources,
-                    .NOMEM => error.SystemResources,
-                    .PROTO => error.ProtocolFailure,
-                    .PERM => error.BlockedByFirewall,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            } else {
-                op.data.accepted_socket = @intCast(cqe.res);
-            }
-        },
-        .connect => {
-            const op = Op(io.Connect).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .ACCES => error.AccessDenied,
-                    .PERM => error.PermissionDenied,
-                    .ADDRINUSE => error.AddressInUse,
-                    .ADDRNOTAVAIL => error.AddressNotAvailable,
-                    .AFNOSUPPORT => error.AddressFamilyNotSupported,
-                    .AGAIN, .INPROGRESS => error.WouldBlock,
-                    .ALREADY => error.ConnectionPending,
-                    .CONNREFUSED => error.ConnectionRefused,
-                    .CONNRESET => error.ConnectionResetByPeer,
-                    .HOSTUNREACH => error.NetworkUnreachable,
-                    .NETUNREACH => error.NetworkUnreachable,
-                    .TIMEDOUT => error.ConnectionTimedOut,
-                    // Returned when socket is AF.UNIX and the given
-                    // path does not exist.
-                    .NOENT => error.FileNotFound,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            }
-        },
-        .shutdown => {
-            const op = Op(io.Shutdown).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .NOTCONN => error.SocketNotConnected,
-                    .NOBUFS => error.SystemResources,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            }
-        },
-        .closesocket => {},
-        .recv => {
-            const op = Op(io.Recv).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .NOTCONN => error.SocketNotConnected,
-                    .AGAIN => error.WouldBlock,
-                    .NOMEM => error.SystemResources,
-                    .CONNREFUSED => error.ConnectionRefused,
-                    .CONNRESET => error.ConnectionResetByPeer,
-                    .TIMEDOUT => error.ConnectionTimedOut,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            } else op.data.recv = @intCast(cqe.res);
-        },
-        .send => {
-            const op = Op(io.Send).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .ACCES => error.AccessDenied,
-                    .AGAIN => error.WouldBlock,
-                    .ALREADY => error.FastOpenAlreadyInProgress,
-                    .CONNREFUSED => error.ConnectionRefused,
-                    .CONNRESET => error.ConnectionResetByPeer,
-                    // connection-mode socket was connected already but
-                    // a recipient was specified
-                    .MSGSIZE => error.MessageTooBig,
-                    .NOBUFS => error.SystemResources,
-                    .NOMEM => error.SystemResources,
-                    // Some bit in the flags argument is inappropriate
-                    // for the socket type.
-                    .PIPE => error.BrokenPipe,
-                    .LOOP => error.SymLinkLoop,
-                    .NOENT => error.FileNotFound,
-                    .NOTDIR => error.NotDir,
-                    .NOTCONN => error.SocketNotConnected,
-                    .NETDOWN => error.NetworkSubsystemFailed,
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            } else op.data.send = @intCast(cqe.res);
-        },
         .spawn => unreachable,
         .waitpid => {
             const op = Op(io.WaitPid).fromHeader(op_h);
@@ -586,14 +368,25 @@ pub const fStat = io.opInitOf(Io, io.FStat);
 pub const getCwd = io.opInitOf(Io, io.GetCwd);
 pub const chDir = io.opInitOf(Io, io.ChDir);
 pub const unlinkAt = io.opInitOf(Io, io.UnlinkAt);
-pub const socket = io.opInitOf(Io, io.Socket);
-pub const bind = io.opInitOf(Io, io.Bind);
-pub const listen = io.opInitOf(Io, io.Listen);
-pub const accept = io.opInitOf(Io, io.Accept);
-pub const connect = io.opInitOf(Io, io.Connect);
-pub const shutdown = io.opInitOf(Io, io.Shutdown);
-pub const closeSocket = io.opInitOf(Io, io.CloseSocket);
-pub const recv = io.opInitOf(Io, io.Recv);
-pub const send = io.opInitOf(Io, io.Send);
 pub const spawn = io.opInitOf(Io, io.Spawn);
 pub const waitPid = io.opInitOf(Io, io.WaitPid);
+
+fn msToTimespec(ms: u64) linux.kernel_timespec {
+    const max: linux.kernel_timespec = .{
+        .sec = std.math.maxInt(isize),
+        .nsec = std.math.maxInt(isize),
+    };
+    const next_s = std.math.cast(isize, ms / std.time.ms_per_s) orelse
+        return max;
+    const next_ns = std.math.cast(
+        isize,
+        (ms % std.time.ms_per_s) * std.time.ns_per_ms,
+    ) orelse return max;
+
+    const now = posix.clock_gettime(posix.CLOCK.MONOTONIC) catch unreachable;
+
+    return .{
+        .sec = std.math.add(isize, now.sec, next_s) catch return max,
+        .nsec = std.math.add(isize, now.nsec, next_ns) catch return max,
+    };
+}

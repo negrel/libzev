@@ -188,87 +188,6 @@ pub fn OpPrivateData(T: type) type {
                         };
                     }
                 },
-                .socket => {
-                    op.data.socket = std.posix.socket(
-                        @intFromEnum(op.data.domain),
-                        @intFromEnum(op.data.socket_type),
-                        @intFromEnum(op.data.protocol),
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                        return;
-                    };
-                },
-                .bind => {
-                    std.posix.bind(
-                        op.data.socket,
-                        op.data.address,
-                        op.data.address_len,
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                    };
-                },
-                .listen => {
-                    std.posix.listen(
-                        op.data.socket,
-                        @intCast(op.data.backlog),
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                    };
-                },
-                .accept => {
-                    op.data.accepted_socket = std.posix.accept(
-                        op.data.socket,
-                        op.data.address,
-                        op.data.address_len,
-                        op.data.flags,
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                        return;
-                    };
-                },
-                .connect => {
-                    std.posix.connect(
-                        op.data.socket,
-                        op.data.address,
-                        op.data.address_len,
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                    };
-                },
-                .shutdown => {
-                    std.posix.shutdown(
-                        op.data.socket,
-                        @enumFromInt(@intFromEnum(op.data.how)),
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                    };
-                },
-                .closesocket => {
-                    if (builtin.os.tag == .windows)
-                        std.posix.closesocket(op.data.socket)
-                    else
-                        std.posix.close(op.data.socket);
-                },
-                .recv => {
-                    op.data.recv = std.posix.recv(
-                        op.data.socket,
-                        op.data.buffer[0..op.data.buffer_len],
-                        op.data.flags,
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                        return;
-                    };
-                },
-                .send => {
-                    op.data.send = std.posix.send(
-                        op.data.socket,
-                        op.data.buffer[0..op.data.buffer_len],
-                        op.data.flags,
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                        return;
-                    };
-                },
                 .spawn => {
                     if (builtin.os.tag == .windows) {
                         windowsSpawn(&op.data) catch |err| {
@@ -394,7 +313,7 @@ pub fn posixSpawn(data: *io.Spawn) anyerror!std.posix.pid_t {
 }
 
 pub const noOp = io.opInitOf(Io, io.NoOp);
-pub const timeOut = io.opInitOf(Io, io.TimeOut);
+pub const timeOut = io.opInitOf(Io, io.Sleep);
 pub const openAt = io.opInitOf(Io, io.OpenAt);
 pub const close = io.opInitOf(Io, io.Close);
 pub const pRead = io.opInitOf(Io, io.PRead);
@@ -404,15 +323,6 @@ pub const fStat = io.opInitOf(Io, io.FStat);
 pub const getCwd = io.opInitOf(Io, io.GetCwd);
 pub const chDir = io.opInitOf(Io, io.ChDir);
 pub const unlinkAt = io.opInitOf(Io, io.UnlinkAt);
-pub const socket = io.opInitOf(Io, io.Socket);
-pub const bind = io.opInitOf(Io, io.Bind);
-pub const listen = io.opInitOf(Io, io.Listen);
-pub const accept = io.opInitOf(Io, io.Accept);
-pub const connect = io.opInitOf(Io, io.Connect);
-pub const shutdown = io.opInitOf(Io, io.Shutdown);
-pub const closeSocket = io.opInitOf(Io, io.CloseSocket);
-pub const recv = io.opInitOf(Io, io.Recv);
-pub const send = io.opInitOf(Io, io.Send);
 pub const spawn = io.opInitOf(Io, io.Spawn);
 pub const waitPid = io.opInitOf(Io, io.WaitPid);
 
@@ -420,7 +330,7 @@ const lfs64_abi = builtin.os.tag == .linux and
     builtin.link_libc and
     (builtin.abi.isGnu() or builtin.abi.isAndroid());
 
-fn doTimeout(op: *Op(io.TimeOut)) void {
+fn doTimeout(op: *Op(io.Sleep)) void {
     const req: posix.system.timespec = .{
         .sec = std.math.cast(i64, op.data.msec / std.time.ms_per_s) orelse
             std.math.maxInt(i64),
