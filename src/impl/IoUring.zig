@@ -268,13 +268,18 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
         .waitpid => {
             const op = Op(io.WaitPid).fromHeader(op_h);
             if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .CHILD => error.NoChild,
-                    .INTR => error.SignalInterrupt,
-                    .INVAL => error.InvalidSyscallParameters,
-                    else => |err| posix.unexpectedErrno(err),
-                });
+                ThreadPool.waitPidErrorFromErrno(
+                    @as(isize, @intCast(cqe.res)),
+                ) catch |err| {
+                    switch (err) {
+                        error.SignalInterrupt => unreachable,
+                        else => |e| op.data.result = e,
+                    }
+                    return;
+                };
+                unreachable;
+            } else {
+                op.data.result = @intCast(cqe.res);
             }
         },
     }

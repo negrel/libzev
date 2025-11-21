@@ -169,9 +169,7 @@ pub fn OpPrivateData(T: type) type {
                 .chdir => doChDir(op),
                 .unlinkat => doUnlinkAt(op),
                 .spawn => doSpawn(op),
-                .waitpid => {
-                    op.data.status = std.posix.waitpid(op.data.pid, 0).status;
-                },
+                .waitpid => doWaitPid(op),
             }
         }
     };
@@ -675,6 +673,35 @@ pub fn posixSpawn(data: *io.Spawn) io.Spawn.Error!io.Spawn.Result {
         const err_code: *u16 = @ptrCast(@alignCast(&buf[0]));
         return @errorCast(@errorFromInt(err_code.*));
     }
+}
+
+fn doWaitPid(op: *Op(io.WaitPid)) void {
+    var status: u32 = undefined;
+    while (true) {
+        const rc = system.waitpid(op.data.pid, &status, 0);
+        waitPidErrorFromErrno(rc) catch |err| switch (err) {
+            error.SignalInterrupt => continue,
+            else => |e| {
+                op.data.result = e;
+                return;
+            },
+        };
+
+        op.data.result = status;
+        return;
+    }
+}
+
+pub fn waitPidErrorFromErrno(
+    rc: anytype,
+) (io.WaitPid.Error || error{SignalInterrupt})!void {
+    return switch (posix.errno(rc)) {
+        .SUCCESS => {},
+        .INTR => error.SignalInterrupt,
+        .CHILD => error.NoChild,
+        // .INVAL => unreachable, // Invalid flags.
+        else => |err| posix.unexpectedErrno(err),
+    };
 }
 
 // Queuing and polling sleep operations on a threadpool with 1 thread is faster

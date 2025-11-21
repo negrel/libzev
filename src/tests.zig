@@ -453,7 +453,7 @@ test "spawn/wait" {
                     _: *Io,
                     op: *Io.Op(zev.WaitPid),
                 ) void {
-                    waitPid = op.data.result();
+                    waitPid = op.data.result;
                     waitPidCalled = true;
                 }
             };

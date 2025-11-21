@@ -381,21 +381,13 @@ pub const WaitPid = struct {
     pub const op_code = OpCode.waitpid;
 
     pub const Error = error{
-        // Process does not have any unwaited-for children.
         NoChild,
-        SignalInterrupt,
-        InvalidSyscallParameters,
+        Unexpected,
     };
 
-    pid: std.posix.pid_t,
+    pid: std.process.Child.Id,
 
-    status: u32 = 0,
-    err_code: u16 = 0,
-
-    pub fn result(self: *WaitPid) Error!u32 {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return self.status;
-    }
+    result: Error!u32 = undefined,
 };
 
 pub fn opInitOf(Io: type, T: type) OpConstructor(Io, T) {
