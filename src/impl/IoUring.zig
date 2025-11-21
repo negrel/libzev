@@ -127,9 +127,13 @@ fn submitOpHeader(self: *Io, op: anytype) !void {
         },
         *Op(io.GetCwd), *Op(io.ChDir) => unreachable,
         *Op(io.UnlinkAt) => {
+            const d = op.data;
+            op.private.uring_data = posix.toPosixPath(d.path) catch
+                [1:0]u8{0} ** (posix.PATH_MAX - 1);
+
             sqe.prep_unlinkat(
-                op.data.dir,
-                op.data.path,
+                d.dir.fd,
+                op.private.uring_data[0..],
                 if (op.data.remove_dir) posix.AT.REMOVEDIR else 0,
             );
         },
@@ -256,33 +260,9 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
         .getcwd, .chdir => unreachable,
         .unlinkat => {
             const op = Op(io.UnlinkAt).fromHeader(op_h);
-            if (cqe.res < 0) {
-                const rc = errno(cqe.res);
-                op.data.err_code = @intFromError(switch (rc) {
-                    .ACCES => error.AccessDenied,
-                    .BUSY => error.FileBusy,
-                    .FAULT => error.BadAddress,
-                    .IO => error.FileSystem,
-                    .ISDIR => error.IsDir,
-                    .LOOP => error.SymLinkLoop,
-                    .NAMETOOLONG => error.NameTooLong,
-                    .NOENT => error.FileNotFound,
-                    .NOTDIR => error.NotDir,
-                    .NOMEM => error.SystemResources,
-                    .ROFS => error.ReadOnlyFileSystem,
-                    .EXIST => if (op.data.remove_dir)
-                        error.DirNotEmpty
-                    else
-                        unreachable,
-                    .NOTEMPTY => error.DirNotEmpty,
-                    .PERM => error.PermissionDenied,
-                    .ILSEQ => |err| if (builtin.os.tag == .wasi)
-                        error.InvalidUtf8
-                    else
-                        posix.unexpectedErrno(err),
-                    else => |err| posix.unexpectedErrno(err),
-                });
-            }
+            op.data.result = ThreadPool.unlinkAtErrorFromErrno(
+                @as(isize, @intCast(cqe.res)),
+            );
         },
         .spawn => unreachable,
         .waitpid => {
@@ -320,7 +300,7 @@ pub fn Op(T: type) type {
 pub fn OpPrivateData(T: type) type {
     const UringData = if (T == io.Sleep) T: {
         break :T linux.kernel_timespec;
-    } else if (T == io.OpenAt) T: {
+    } else if (T == io.OpenAt or T == io.UnlinkAt) T: {
         break :T [posix.PATH_MAX - 1:0]u8;
     } else if (T == io.FStat) T: {
         break :T linux.Statx;

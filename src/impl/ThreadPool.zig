@@ -53,31 +53,35 @@ pub fn submit(self: *Io, op: anytype) io.QueueError!void {
 }
 
 pub fn poll(self: *Io, mode: io.PollMode) !u32 {
-    const active = self.active.load(.seq_cst);
+    var active = self.active.load(.seq_cst);
 
     // Don't submit if it will overflow active.
-    if (std.math.add(u32, active, @intCast(self.batch.len)) != error.Overflow) {
+    if (std.math.add(u32, active, self.batch.len) != error.Overflow) {
         // Submit batch.
-        _ = self.active.fetchAdd(@intCast(self.batch.len), .seq_cst);
+        _ = self.active.fetchAdd(self.batch.len, .seq_cst);
+        active += self.batch.len;
+
         self.tpool.schedule(self.batch);
         self.batch = .{};
     }
 
-    if (active > 0) {
-        var i = active;
-        switch (mode) {
-            .nowait => {},
-            .one => while (i > @max(active - 1, 0)) {
-                std.Thread.Futex.wait(&self.active, i);
-                i = self.active.load(.seq_cst);
-            },
-            .all => while (i > 0) {
-                std.Thread.Futex.wait(&self.active, i);
-                i = self.active.load(.seq_cst);
-            },
-        }
+    const target: u32 = switch (mode) {
+        .nowait => return self.execCallbacks(),
+        .one => active - 1,
+        .all => 0,
+    };
+
+    var done: u32 = 0;
+    while (active > target) {
+        std.Thread.Futex.wait(&self.active, active);
+        done += self.execCallbacks();
+        active = self.active.load(.seq_cst);
     }
 
+    return done;
+}
+
+fn execCallbacks(self: *Io) u32 {
     var done: u32 = 0;
     while (self.completed.pop()) |priv| {
         const op: *Op(io.NoOp) = @fieldParentPtr("private", priv);
@@ -163,18 +167,7 @@ pub fn OpPrivateData(T: type) type {
                 .fstat => doFStat(op),
                 .getcwd => doGetCwd(op),
                 .chdir => doChDir(op),
-                .unlinkat => {
-                    const dir: std.fs.Dir = .{ .fd = op.data.dir };
-                    if (op.data.remove_dir) {
-                        dir.deleteDirZ(op.data.path) catch |err| {
-                            op.data.err_code = @intFromError(err);
-                        };
-                    } else {
-                        dir.deleteFileZ(op.data.path) catch |err| {
-                            op.data.err_code = @intFromError(err);
-                        };
-                    }
-                },
+                .unlinkat => doUnlinkAt(op),
                 .spawn => {
                     if (builtin.os.tag == .windows) {
                         windowsSpawn(&op.data) catch |err| {
@@ -633,3 +626,118 @@ fn doChDir(op: *Op(io.ChDir)) void {
         else => |err| posix.unexpectedErrno(err),
     };
 }
+
+fn doUnlinkAt(op: *Op(io.UnlinkAt)) void {
+    const flags: u32 = if (op.data.remove_dir) posix.AT.REMOVEDIR else 0;
+
+    if (builtin.os.tag == .windows) {
+        const file_path_w = windows.sliceToPrefixedFileW(
+            op.data.dir.fd,
+            op.data.path,
+        ) catch |err| {
+            op.data.result = err;
+            return;
+        };
+
+        return posix.unlinkatW(
+            op.data.dir.fd,
+            file_path_w.span(),
+            flags,
+        );
+    } else {
+        const file_path_c = posix.toPosixPath(op.data.path) catch |err| {
+            op.data.result = err;
+            return;
+        };
+
+        op.data.result = unlinkAtErrorFromErrno(system.unlinkat(
+            op.data.dir.fd,
+            file_path_c[0..],
+            flags,
+        ));
+    }
+}
+
+pub fn unlinkAtErrorFromErrno(rc: anytype) io.UnlinkAt.Error!void {
+    return switch (posix.errno(rc)) {
+        .SUCCESS => return,
+        .ACCES => error.AccessDenied,
+        .BADF => error.InvalidDirFd,
+        .BUSY => error.FileBusy,
+        .EXIST => error.DirNotEmpty,
+        .FAULT => error.BadAddress,
+        .ILSEQ => |err| if (builtin.os.tag == .wasi)
+            error.InvalidUtf8
+        else
+            posix.unexpectedErrno(err),
+        // Flag is invalid.
+        // .INVAL => unreachable,
+        .IO => error.FileSystem,
+        .ISDIR => error.IsDir,
+        .LOOP => error.SymLinkLoop,
+        .NAMETOOLONG => error.NameTooLong,
+        .NOENT => error.FileNotFound,
+        .NOMEM => error.SystemResources,
+        .NOTDIR => error.NotDir,
+        .NOTEMPTY => error.DirNotEmpty,
+        .PERM => error.PermissionDenied,
+        .ROFS => error.ReadOnlyFileSystem,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+// Queuing and polling sleep operations on a threadpool with 1 thread is faster
+// than sleeping on the main thread.
+
+// test "benchmark sleep 0s" {
+//     const Static = struct {
+//         fn callback(_: *Io, _: *Op(io.Sleep)) void {}
+//     };
+//
+//     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+//     defer _ = gpa.deinit();
+//     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+//     defer arena.deinit();
+//     var allocator = arena.allocator();
+//
+//     var tpool: Io = undefined;
+//     try tpool.init(.{ .max_threads = 1 });
+//
+//     var timer = try std.time.Timer.start();
+//
+//     const batch_size = 4096;
+//     var batch = try allocator.alloc(Op(io.Sleep), batch_size);
+//
+//     var queued: usize = 0;
+//     var done: usize = 0;
+//     while (timer.read() < std.time.ns_per_s) {
+//         queued += 1;
+//         if (queued % batch_size == 0) {
+//             done += try tpool.poll(.nowait);
+//             batch = try allocator.alloc(Op(io.Sleep), batch_size);
+//         }
+//
+//         batch[queued % batch_size] = Io.sleep(
+//             .{ .msec = 0 },
+//             null,
+//             Static.callback,
+//         );
+//         try tpool.submit(&batch[queued % batch_size]);
+//     }
+//
+//     std.debug.print("{} 0s sleep operations completed in 1s\n", .{done});
+//
+//     _ = try tpool.poll(.all);
+// }
+//
+// test "benchmark sleep 0s single thread" {
+//     var timer = try std.time.Timer.start();
+//
+//     var done: usize = 0;
+//     while (timer.read() < std.time.ns_per_s) {
+//         posix.nanosleep(0, 0);
+//         done += 1;
+//     }
+//
+//     std.debug.print("{} 0s sleep operations completed in 1s\n", .{done});
+// }

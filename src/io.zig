@@ -77,14 +77,8 @@ pub const NoOp = struct {
     pub const op_code = OpCode.noop;
 };
 
-/// TimeOut operation complete at specified time.
-///
-/// Windows:
-/// `remaining_msec` is not used.
-///
-/// Linux:
-/// If timer is interrupted, `remaining_msec` can be used to setup another
-/// TimeOut operation and complete the specified pause.
+/// Sleep operation complete after specified milliseconds elapsed. Time is
+/// relative to Io.poll().
 pub const Sleep = struct {
     pub const op_code = OpCode.sleep;
 
@@ -322,31 +316,30 @@ pub const ChDir = struct {
 pub const UnlinkAt = struct {
     pub const op_code = OpCode.unlinkat;
 
-    pub const Error = (fs.Dir.DeleteFileError || fs.Dir.DeleteDirError);
-
-    pub const Intern = struct {
-        dir: fs.Dir,
-        path: [:0]const u8,
-        remove_dir: bool,
-
-        pub fn toExtern(self: Intern) UnlinkAt {
-            return .{
-                .dir = self.dir.fd,
-                .path = self.path.ptr,
-                .remove_dir = self.remove_dir,
-            };
-        }
+    pub const Error = error{
+        AccessDenied,
+        BadAddress,
+        DirNotEmpty,
+        FileBusy,
+        FileNotFound,
+        FileSystem,
+        InvalidDirFd,
+        InvalidUtf8,
+        IsDir,
+        NameTooLong,
+        NotDir,
+        PermissionDenied,
+        ReadOnlyFileSystem,
+        SymLinkLoop,
+        SystemResources,
+        Unexpected,
     };
 
-    dir: fs.Dir.Handle,
-    path: [*c]const u8,
+    dir: fs.Dir,
+    path: []const u8,
     remove_dir: bool,
 
-    err_code: u16 = 0,
-
-    pub fn result(self: *UnlinkAt) Error!void {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-    }
+    result: Error!void = undefined,
 };
 
 pub const Spawn = struct {

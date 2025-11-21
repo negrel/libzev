@@ -213,7 +213,7 @@ test "openat/pwrite/fsync/close/unlinkat" {
 
                 fn unlinkAtCallback(_: *Io, iop: *Io.Op(zev.UnlinkAt)) void {
                     unlinkAtCalled = true;
-                    unlinkAt = iop.data.result();
+                    unlinkAt = iop.data.result;
                 }
             };
             Static.pwriteCalled = false;

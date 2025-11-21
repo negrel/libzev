@@ -107,7 +107,7 @@ pub const Task = extern struct {
 
 /// An unordered collection of Tasks which can be submitted for scheduling as a group.
 pub const Batch = struct {
-    len: usize = 0,
+    len: u32 = 0,
     head: ?*Task = null,
     tail: ?*Task = null,
 
