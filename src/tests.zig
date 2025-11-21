@@ -362,7 +362,7 @@ test "getcwd" {
 
                 fn getCwdCallback(_: *Io, iop: *Io.Op(zev.GetCwd)) void {
                     callbackCalled = true;
-                    cwd = iop.data.result();
+                    cwd = iop.data.result;
                 }
             };
             Static.callbackCalled = false;

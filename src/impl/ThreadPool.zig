@@ -4,6 +4,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const linux = std.os.linux;
+const windows = std.os.windows;
 const posix = std.posix;
 const system = posix.system;
 
@@ -160,15 +161,7 @@ pub fn OpPrivateData(T: type) type {
                 .pwrite => doPWrite(op),
                 .fsync => doFSync(op),
                 .fstat => doFStat(op),
-                .getcwd => {
-                    const cwd = std.process.getCwd(
-                        op.data.buffer[0..op.data.buffer_len],
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                        return;
-                    };
-                    op.data.cwd_len = cwd.len;
-                },
+                .getcwd => doGetCwd(op),
                 .chdir => {
                     std.process.changeCurDirZ(
                         op.data.path,
@@ -401,7 +394,7 @@ pub fn openAtErrorFromPosixErrno(rc: anytype) io.OpenAt.Error!std.fs.File {
         .BUSY => error.DeviceBusy,
         .DQUOT => error.DiskQuota,
         .EXIST => error.PathAlreadyExists,
-        .FAULT => error.ParamsOutsideAccessibleAddressSpace,
+        .FAULT => error.BadAddress,
         .FBIG => error.FileTooBig,
         .ILSEQ => |err| if (builtin.os.tag == .wasi)
             error.InvalidUtf8
@@ -576,5 +569,41 @@ pub fn fstatErrorFromPosixErrno(rc: anytype) io.FStat.Error!void {
         .NOTDIR => error.NotDir,
         .OVERFLOW => error.Overflow,
         else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+fn doGetCwd(op: *Op(io.GetCwd)) void {
+    if (builtin.os.tag == .windows) {
+        op.data.result = windows.GetCurrentDirectory(op.data.buffer);
+    } else if (builtin.os.tag == .wasi and !builtin.link_libc) {
+        const path = ".";
+        if (op.data.buffer.len < path.len) return error.NameTooLong;
+        const result = op.data.buffer[0..path.len];
+        @memcpy(result, path);
+        return result;
+    }
+
+    const err: posix.E = if (builtin.link_libc) err: {
+        const c_err = if (std.c.getcwd(
+            op.data.buffer.ptr,
+            op.data.buffer.len,
+        )) |_| 0 else std.c._errno().*;
+        break :err @enumFromInt(c_err);
+    } else err: {
+        break :err posix.errno(system.getcwd(
+            op.data.buffer.ptr,
+            op.data.buffer.len,
+        ));
+    };
+    op.data.result = switch (err) {
+        .SUCCESS => std.mem.sliceTo(op.data.buffer, 0),
+        .ACCES => error.PermissionDenied,
+        .FAULT => error.BadAddress,
+        .INVAL => error.InvalidBuffer,
+        .NAMETOOLONG => error.NameTooLong,
+        .NOENT => error.CurrentWorkingDirectoryUnlinked,
+        .NOMEM => error.SystemResources,
+        .RANGE => error.NameTooLong,
+        else => posix.unexpectedErrno(err),
     };
 }

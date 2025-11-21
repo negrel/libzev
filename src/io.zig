@@ -108,6 +108,7 @@ pub const OpenAt = struct {
 
     pub const Error = error{
         AccessDenied,
+        BadAddress,
         DeviceBusy,
         DiskQuota,
         FileBusy,
@@ -122,7 +123,6 @@ pub const OpenAt = struct {
         NoDevice,
         NoSpaceLeft,
         NotDir,
-        ParamsOutsideAccessibleAddressSpace,
         PathAlreadyExists,
         PermissionDenied,
         ProcessFdQuotaExceeded,
@@ -286,32 +286,17 @@ pub const GetCwd = struct {
     pub const op_code = OpCode.getcwd;
 
     pub const Error = error{
+        BadAddress,
         CurrentWorkingDirectoryUnlinked,
+        InvalidBuffer,
         NameTooLong,
+        SystemResources,
         Unexpected,
+        PermissionDenied,
     };
 
-    pub const Intern = struct {
-        buffer: []u8,
-
-        pub fn toExtern(self: Intern) GetCwd {
-            return .{
-                .buffer = self.buffer.ptr,
-                .buffer_len = self.buffer.len,
-            };
-        }
-    };
-
-    buffer: [*c]u8,
-    buffer_len: usize,
-
-    cwd_len: usize = undefined,
-    err_code: u16 = 0,
-
-    pub fn result(self: GetCwd) Error![]u8 {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return self.buffer[0..self.cwd_len];
-    }
+    buffer: []u8,
+    result: Error![]u8 = undefined,
 };
 
 pub const ChDir = struct {
