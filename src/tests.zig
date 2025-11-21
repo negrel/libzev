@@ -398,11 +398,11 @@ test "chdir" {
         fn tcase(Io: type) anyerror!void {
             const Static = struct {
                 var callbackCalled: bool = undefined;
-                var result: std.posix.ChangeCurDirError!void = undefined;
+                var result: zev.ChDir.Error!void = undefined;
 
                 fn chdirCallback(_: *Io, iop: *Io.Op(zev.ChDir)) void {
                     callbackCalled = true;
-                    result = iop.data.result();
+                    result = iop.data.result;
                 }
             };
             Static.callbackCalled = false;

@@ -3,8 +3,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const linux = std.os.linux;
+const posix = std.posix;
 
-const posix = @import("../posix.zig");
 const io = @import("../io.zig");
 const ThreadPool = @import("./ThreadPool.zig");
 
@@ -75,8 +75,8 @@ fn submitOpHeader(self: *Io, op: anytype) !void {
         },
         *Op(io.OpenAt) => {
             const d = op.data;
-            op.private.uring_data = std.posix.toPosixPath(d.path) catch
-                [1:0]u8{0} ** (std.posix.PATH_MAX - 1);
+            op.private.uring_data = posix.toPosixPath(d.path) catch
+                [1:0]u8{0} ** (posix.PATH_MAX - 1);
 
             const flags: linux.O = .{
                 .ACCMODE = switch (d.options.read) {
@@ -260,8 +260,8 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
                 const rc = errno(cqe.res);
                 op.data.err_code = @intFromError(switch (rc) {
                     .ACCES => error.AccessDenied,
-                    .PERM => error.PermissionDenied,
                     .BUSY => error.FileBusy,
+                    .FAULT => error.BadAddress,
                     .IO => error.FileSystem,
                     .ISDIR => error.IsDir,
                     .LOOP => error.SymLinkLoop,
@@ -275,6 +275,7 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
                     else
                         unreachable,
                     .NOTEMPTY => error.DirNotEmpty,
+                    .PERM => error.PermissionDenied,
                     .ILSEQ => |err| if (builtin.os.tag == .wasi)
                         error.InvalidUtf8
                     else
@@ -320,7 +321,7 @@ pub fn OpPrivateData(T: type) type {
     const UringData = if (T == io.Sleep) T: {
         break :T linux.kernel_timespec;
     } else if (T == io.OpenAt) T: {
-        break :T [std.posix.PATH_MAX - 1:0]u8;
+        break :T [posix.PATH_MAX - 1:0]u8;
     } else if (T == io.FStat) T: {
         break :T linux.Statx;
     } else if (T == io.WaitPid) T: {

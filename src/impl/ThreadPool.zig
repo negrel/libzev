@@ -162,14 +162,7 @@ pub fn OpPrivateData(T: type) type {
                 .fsync => doFSync(op),
                 .fstat => doFStat(op),
                 .getcwd => doGetCwd(op),
-                .chdir => {
-                    std.process.changeCurDirZ(
-                        op.data.path,
-                    ) catch |err| {
-                        op.data.err_code = @intFromError(err);
-                        return;
-                    };
-                },
+                .chdir => doChDir(op),
                 .unlinkat => {
                     const dir: std.fs.Dir = .{ .fd = op.data.dir };
                     if (op.data.remove_dir) {
@@ -605,5 +598,38 @@ fn doGetCwd(op: *Op(io.GetCwd)) void {
         .NOMEM => error.SystemResources,
         .RANGE => error.NameTooLong,
         else => posix.unexpectedErrno(err),
+    };
+}
+
+fn doChDir(op: *Op(io.ChDir)) void {
+    const dir_path = posix.toPosixPath(op.data.path) catch |err| {
+        op.data.result = err;
+        return;
+    };
+
+    if (builtin.os.tag == .windows) {
+        const dir_path_span = std.mem.span(dir_path);
+        var wtf16_dir_path: [windows.PATH_MAX_WIDE]u16 = undefined;
+        if (try std.unicode.checkWtf8ToWtf16LeOverflow(dir_path_span, &wtf16_dir_path)) {
+            return error.NameTooLong;
+        }
+        const len = try std.unicode.wtf8ToWtf16Le(&wtf16_dir_path, dir_path_span);
+        return posix.chdirW(wtf16_dir_path[0..len]);
+    }
+    op.data.result = switch (posix.errno(system.chdir(&dir_path))) {
+        .SUCCESS => undefined,
+        .ACCES => error.AccessDenied,
+        .FAULT => error.BadAddress,
+        .IO => error.FileSystem,
+        .LOOP => error.SymLinkLoop,
+        .NAMETOOLONG => error.NameTooLong,
+        .NOENT => error.FileNotFound,
+        .NOMEM => error.SystemResources,
+        .NOTDIR => error.NotDir,
+        .ILSEQ => |err| if (builtin.os.tag == .wasi)
+            error.InvalidUtf8
+        else
+            posix.unexpectedErrno(err),
+        else => |err| posix.unexpectedErrno(err),
     };
 }

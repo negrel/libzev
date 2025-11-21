@@ -290,9 +290,9 @@ pub const GetCwd = struct {
         CurrentWorkingDirectoryUnlinked,
         InvalidBuffer,
         NameTooLong,
+        PermissionDenied,
         SystemResources,
         Unexpected,
-        PermissionDenied,
     };
 
     buffer: []u8,
@@ -302,22 +302,21 @@ pub const GetCwd = struct {
 pub const ChDir = struct {
     pub const op_code = OpCode.chdir;
 
-    pub const Error = std.posix.ChangeCurDirError;
-
-    pub const Intern = struct {
-        path: [:0]const u8,
-
-        pub fn toExtern(self: Intern) ChDir {
-            return .{ .path = self.path.ptr };
-        }
+    pub const Error = error{
+        AccessDenied,
+        BadAddress,
+        FileNotFound,
+        FileSystem,
+        InvalidUtf8,
+        NameTooLong,
+        NotDir,
+        SymLinkLoop,
+        SystemResources,
+        Unexpected,
     };
 
-    path: [*c]const u8,
-    err_code: u16 = 0,
-
-    pub fn result(self: ChDir) Error!void {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-    }
+    path: []const u8,
+    result: Error!void = undefined,
 };
 
 pub const UnlinkAt = struct {
