@@ -168,128 +168,13 @@ pub fn OpPrivateData(T: type) type {
                 .getcwd => doGetCwd(op),
                 .chdir => doChDir(op),
                 .unlinkat => doUnlinkAt(op),
-                .spawn => {
-                    if (builtin.os.tag == .windows) {
-                        windowsSpawn(&op.data) catch |err| {
-                            op.data.err_code = @intFromError(err);
-                            return;
-                        };
-                    } else {
-                        op.data.pid = posixSpawn(&op.data) catch |err| {
-                            op.data.err_code = @intFromError(err);
-                            return;
-                        };
-                    }
-                },
+                .spawn => doSpawn(op),
                 .waitpid => {
                     op.data.status = std.posix.waitpid(op.data.pid, 0).status;
                 },
             }
         }
     };
-}
-
-pub fn windowsSpawn(data: *io.Spawn) io.Spawn.Error!void {
-    _ = data;
-    @compileError("TODO: implements windows spawn");
-}
-
-pub fn posixSpawn(data: *io.Spawn) anyerror!std.posix.pid_t {
-    const Static = struct {
-        fn reportChildError(
-            fd: std.posix.fd_t,
-            err: anyerror,
-        ) noreturn {
-            const err_code: u16 = @intFromError(err);
-            const err_slice: [*c]const u8 = @ptrCast(&err_code);
-            _ = std.posix.write(fd, err_slice[0..2]) catch {};
-            // If we're linking libc, some naughty applications may have
-            // registered atexit handlers which we really do not want to run in
-            // the fork child. I caught LLVM doing this and
-            // it caused a deadlock instead of doing an exit syscall. In the
-            // words of Avril Lavigne, "Why'd you have to go and make things so
-            // complicated?"
-            if (builtin.link_libc) {
-                // The _exit(2) function does nothing but make the exit syscall,
-                // unlike exit(3)
-                std.c._exit(1);
-            }
-            posix.exit(1);
-        }
-    };
-
-    // Setup a pipe so child can communicate error/success setup before exec().
-    const err_pipe = try std.posix.pipe2(.{ .CLOEXEC = true });
-    errdefer {
-        std.posix.close(err_pipe[0]);
-        std.posix.close(err_pipe[1]);
-    }
-
-    // Setup pipes if any.
-    var stdio_pipes: [3]std.posix.pid_t = .{ -1, -1, -1 };
-    errdefer for (stdio_pipes) |p| if (p != -1) std.posix.close(p);
-    for (data.stdio, 0..data.stdio.len) |stdio, i| {
-        if (stdio == .pipe) {
-            const pipes = try std.posix.pipe2(.{});
-            switch (i) {
-                0 => {
-                    data.stdin = pipes[1];
-                    stdio_pipes[i] = pipes[0];
-                },
-                1 => {
-                    data.stdout = pipes[0];
-                    stdio_pipes[i] = pipes[1];
-                },
-                2 => {
-                    data.stderr = pipes[0];
-                    stdio_pipes[i] = pipes[1];
-                },
-                else => unreachable,
-            }
-        }
-    }
-
-    const pid = try std.posix.fork();
-    if (pid == 0) { // Child.
-        std.posix.close(err_pipe[0]); // Close read side.
-
-        var ignore_fd: ?std.posix.fd_t = null;
-        for (data.stdio, 0..data.stdio.len) |stdio, i| {
-            switch (stdio) {
-                .inherit => {},
-                .ignore => {
-                    if (ignore_fd == null) {
-                        ignore_fd = std.posix.openZ(
-                            "/dev/null",
-                            .{ .ACCMODE = .RDWR },
-                            0,
-                        ) catch |err| Static.reportChildError(err_pipe[1], err);
-                    }
-                    std.posix.dup2(ignore_fd.?, @intCast(i)) catch |err|
-                        Static.reportChildError(err_pipe[1], err);
-                },
-                .pipe => {
-                    std.posix.dup2(stdio_pipes[i], @intCast(i)) catch |err|
-                        Static.reportChildError(err_pipe[1], err);
-                },
-                .close => std.posix.close(@intCast(i)),
-            }
-        }
-
-        const err = std.posix.execvpeZ(data.args[0], data.args, data.env_vars);
-        Static.reportChildError(err_pipe[1], err);
-        std.posix.exit(0);
-    } else { // Parent.
-        std.posix.close(err_pipe[1]); // Close write side.
-
-        // Read if child reported an error.
-        var buf: [2]u8 = .{ 0, 0 };
-        const read = std.posix.read(err_pipe[0], buf[0..]) catch
-            return error.Unexpected;
-        if (read == 0) return pid;
-        const err_code: *u16 = @ptrCast(@alignCast(&buf[0]));
-        return @errorFromInt(err_code.*);
-    }
 }
 
 pub const noOp = io.opInitOf(Io, io.NoOp);
@@ -684,6 +569,112 @@ pub fn unlinkAtErrorFromErrno(rc: anytype) io.UnlinkAt.Error!void {
         .ROFS => error.ReadOnlyFileSystem,
         else => |err| posix.unexpectedErrno(err),
     };
+}
+
+fn doSpawn(op: *Op(io.Spawn)) void {
+    op.data.result = posixSpawn(&op.data);
+}
+
+pub fn posixSpawn(data: *io.Spawn) io.Spawn.Error!io.Spawn.Result {
+    const Static = struct {
+        fn reportChildError(
+            fd: std.posix.fd_t,
+            err: anyerror,
+        ) noreturn {
+            const err_code: u16 = @intFromError(err);
+            const err_slice: [*c]const u8 = @ptrCast(&err_code);
+            _ = std.posix.write(fd, err_slice[0..2]) catch {};
+            // If we're linking libc, some naughty applications may have
+            // registered atexit handlers which we really do not want to run in
+            // the fork child. I caught LLVM doing this and
+            // it caused a deadlock instead of doing an exit syscall. In the
+            // words of Avril Lavigne, "Why'd you have to go and make things so
+            // complicated?"
+            if (builtin.link_libc) {
+                // The _exit(2) function does nothing but make the exit syscall,
+                // unlike exit(3)
+                std.c._exit(1);
+            }
+            posix.exit(1);
+        }
+    };
+    var result: io.Spawn.Result = undefined;
+
+    // Setup a pipe so child can communicate error/success setup before exec().
+    const err_pipe = try std.posix.pipe2(.{ .CLOEXEC = true });
+    errdefer {
+        std.posix.close(err_pipe[0]);
+        std.posix.close(err_pipe[1]);
+    }
+
+    // Setup pipes if any.
+    const stdio: [3]io.Spawn.StdIo = .{ data.stdin, data.stdout, data.stderr };
+    var child_pipes: [3]?std.fs.File.Handle = .{ null, null, null };
+    errdefer for (child_pipes) |p| if (p) |fd| std.posix.close(fd);
+    inline for (stdio, 0..stdio.len) |s, i| {
+        if (s == .pipe) {
+            const pipes = try std.posix.pipe2(.{});
+            switch (i) {
+                0 => {
+                    result.stdin = .{ .handle = pipes[0] };
+                    child_pipes[0] = pipes[1];
+                },
+                1 => {
+                    result.stdout = .{ .handle = pipes[1] };
+                    child_pipes[1] = pipes[0];
+                },
+                2 => {
+                    result.stderr = .{ .handle = pipes[1] };
+                    child_pipes[2] = pipes[0];
+                },
+                else => unreachable,
+            }
+        }
+    }
+
+    const pid = try std.posix.fork();
+    if (pid == 0) { // Child.
+        std.posix.close(err_pipe[0]); // Close read side.
+
+        var ignore_fd: ?std.posix.fd_t = null;
+        for (stdio, 0..stdio.len) |s, i| {
+            switch (s) {
+                .inherit => {},
+                .ignore => {
+                    if (ignore_fd == null) {
+                        ignore_fd = std.posix.openZ(
+                            "/dev/null",
+                            .{ .ACCMODE = .RDWR },
+                            0,
+                        ) catch |err| Static.reportChildError(err_pipe[1], err);
+                    }
+                    std.posix.dup2(ignore_fd.?, @intCast(i)) catch |err|
+                        Static.reportChildError(err_pipe[1], err);
+                },
+                .pipe => {
+                    std.posix.dup2(child_pipes[i].?, @intCast(i)) catch |err|
+                        Static.reportChildError(err_pipe[1], err);
+                },
+                .close => std.posix.close(@intCast(i)),
+            }
+        }
+
+        const err = std.posix.execvpeZ(data.args[0].?, data.args, data.env_vars);
+        Static.reportChildError(err_pipe[1], err);
+        std.posix.exit(0);
+    } else { // Parent.
+        std.posix.close(err_pipe[1]); // Close write side.
+
+        result.pid = pid;
+
+        // Read if child reported an error.
+        var buf: [2]u8 = .{ 0, 0 };
+        const read = std.posix.read(err_pipe[0], buf[0..]) catch
+            return error.Unexpected;
+        if (read == 0) return result;
+        const err_code: *u16 = @ptrCast(@alignCast(&buf[0]));
+        return @errorCast(@errorFromInt(err_code.*));
+    }
 }
 
 // Queuing and polling sleep operations on a threadpool with 1 thread is faster

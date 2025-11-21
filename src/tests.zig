@@ -438,14 +438,14 @@ test "spawn/wait" {
             const Static = struct {
                 var spawnCalled: bool = undefined;
                 var waitPidCalled: bool = undefined;
-                var spawn: zev.Spawn.Error!std.posix.pid_t = undefined;
+                var spawn: zev.Spawn.Error!zev.Spawn.Result = undefined;
                 var waitPid: zev.WaitPid.Error!u32 = undefined;
 
                 fn spawnCallback(
                     _: *Io,
                     op: *Io.Op(zev.Spawn),
                 ) void {
-                    spawn = op.data.result();
+                    spawn = op.data.result;
                     spawnCalled = true;
                 }
 
@@ -482,7 +482,7 @@ test "spawn/wait" {
                 try std.testing.expect(Static.spawnCalled);
             }
 
-            const pid = try Static.spawn;
+            const pid = (try Static.spawn).pid;
 
             // Wait pid.
             {

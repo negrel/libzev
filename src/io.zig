@@ -361,36 +361,20 @@ pub const Spawn = struct {
         close,
     };
 
-    pub const Intern = struct {
-        args: [*:null]const ?[*:0]const u8,
-        env_vars: [*:null]const ?[*:0]const u8,
-        stdin: StdIo,
-        stdout: StdIo,
-        stderr: StdIo,
-
-        pub fn toExtern(self: Intern) Spawn {
-            return .{
-                .args = self.args,
-                .env_vars = self.env_vars,
-                .stdio = .{ self.stdin, self.stdout, self.stderr },
-            };
-        }
+    pub const Result = struct {
+        pid: std.process.Child.Id,
+        stdin: std.fs.File,
+        stdout: std.fs.File,
+        stderr: std.fs.File,
     };
 
-    args: [*c]const [*c]const u8,
-    env_vars: [*c]const [*c]const u8,
-    stdio: [3]StdIo,
+    args: [*:null]const ?[*:0]const u8,
+    env_vars: [*:null]const ?[*:0]const u8,
+    stdin: StdIo,
+    stdout: StdIo,
+    stderr: StdIo,
 
-    pid: std.posix.pid_t = undefined,
-    stdin: std.posix.pid_t = undefined,
-    stdout: std.posix.pid_t = undefined,
-    stderr: std.posix.pid_t = undefined,
-    err_code: u16 = 0,
-
-    pub fn result(self: *Spawn) Error!std.posix.pid_t {
-        if (self.err_code != 0) return @errorCast(@errorFromInt(self.err_code));
-        return self.pid;
-    }
+    result: Error!Result = undefined,
 };
 
 pub const WaitPid = struct {
@@ -417,7 +401,7 @@ pub const WaitPid = struct {
 pub fn opInitOf(Io: type, T: type) OpConstructor(Io, T) {
     return struct {
         pub fn func(
-            data: if (@hasDecl(T, "Intern")) T.Intern else T,
+            data: T,
             user_data: ?*anyopaque,
             comptime callback: *const fn (*Io, *Op(Io, T)) void,
         ) Op(Io, T) {
@@ -437,7 +421,7 @@ pub fn opInitOf(Io: type, T: type) OpConstructor(Io, T) {
                         }
                     }.cb,
                 },
-                .data = if (@hasDecl(T, "Intern")) data.toExtern() else data,
+                .data = data,
                 .private = Io.OpPrivateData(T).init(.{}),
             };
         }
@@ -445,19 +429,11 @@ pub fn opInitOf(Io: type, T: type) OpConstructor(Io, T) {
 }
 
 pub fn OpConstructor(Io: type, T: type) type {
-    if (@hasDecl(T, "Intern")) {
-        return *const fn (
-            T.Intern,
-            user_data: ?*anyopaque,
-            comptime callback: *const fn (*Io, *Io.Op(T)) void,
-        ) Io.Op(T);
-    } else {
-        return *const fn (
-            T,
-            user_data: ?*anyopaque,
-            comptime callback: *const fn (*Io, *Io.Op(T)) void,
-        ) Io.Op(T);
-    }
+    return *const fn (
+        T,
+        user_data: ?*anyopaque,
+        comptime callback: *const fn (*Io, *Io.Op(T)) void,
+    ) Io.Op(T);
 }
 
 pub const QueueError = error{
