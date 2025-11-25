@@ -67,7 +67,7 @@ pub fn poll(self: *Io, mode: io.PollMode) !u32 {
 
     const target: u32 = switch (mode) {
         .nowait => return self.execCallbacks(),
-        .one => active - 1,
+        .one => if (active > 0) active - 1 else 0,
         .all => 0,
     };
 
