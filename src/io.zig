@@ -4,8 +4,6 @@
 const std = @import("std");
 const fs = std.fs;
 
-const posix = @import("./posix.zig");
-
 /// OpCode enumerates all supported I/O operation.
 pub const OpCode = enum {
     noop,
