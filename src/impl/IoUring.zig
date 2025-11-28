@@ -218,59 +218,58 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
         },
         .openat => {
             const op = Op(io.OpenAt).fromHeader(op_h);
-            op.data.result = ThreadPool.openAtErrorFromPosixErrno(
-                @as(isize, @intCast(cqe.res)),
-            );
+            if (ThreadPool.openAtErrorFromPosixE(errno(cqe.res))) {
+                op.data.result = .{ .handle = @intCast(cqe.res) };
+            } else |err| {
+                op.data.result = err;
+            }
         },
         .close => {
             const op = Op(io.Close).fromHeader(op_h);
-            op.data.result = ThreadPool.closeErrorFromPosixErrno(
-                @as(isize, @intCast(cqe.res)),
+            op.data.result = ThreadPool.closeErrorFromPosixE(
+                errno(cqe.res),
             );
         },
         .pread => {
             const op = Op(io.PRead).fromHeader(op_h);
-            op.data.result = ThreadPool.preadErrorFromPosixErrno(
-                @as(isize, @intCast(cqe.res)),
-            );
+            if (ThreadPool.preadErrorFromPosixE(errno(cqe.res))) {
+                op.data.result = @intCast(cqe.res);
+            } else |err| {
+                op.data.result = err;
+            }
         },
         .pwrite => {
             const op = Op(io.PWrite).fromHeader(op_h);
-            op.data.result = ThreadPool.pwriteErrorFromPosixErrno(
-                @as(isize, @intCast(cqe.res)),
-            );
+            if (ThreadPool.pwriteErrorFromPosixE(errno(cqe.res))) {
+                op.data.result = @intCast(cqe.res);
+            } else |err| {
+                op.data.result = err;
+            }
         },
         .fsync => {
             const op = Op(io.FSync).fromHeader(op_h);
-            op.data.result = ThreadPool.fsyncErrorFromPosixErrno(
-                @as(isize, @intCast(cqe.res)),
-            );
+            op.data.result = ThreadPool.fsyncErrorFromPosixE(errno(cqe.res));
         },
         .fstat => {
             const op = Op(io.FStat).fromHeader(op_h);
-            ThreadPool.fstatErrorFromPosixErrno(
-                @as(isize, @intCast(cqe.res)),
-            ) catch |err| {
+            if (ThreadPool.fstatErrorFromPosixE(errno(cqe.res))) {
+                op.data.result = std.fs.File.Stat.fromLinux(
+                    op.private.uring_data,
+                );
+            } else |err| {
                 op.data.result = err;
-                return;
-            };
-
-            op.data.result = std.fs.File.Stat.fromLinux(op.private.uring_data);
+            }
         },
         .getcwd, .chdir => unreachable,
         .unlinkat => {
             const op = Op(io.UnlinkAt).fromHeader(op_h);
-            op.data.result = ThreadPool.unlinkAtErrorFromErrno(
-                @as(isize, @intCast(cqe.res)),
-            );
+            op.data.result = ThreadPool.unlinkAtErrorFromErrno(errno(cqe.res));
         },
         .spawn => unreachable,
         .waitpid => {
             const op = Op(io.WaitPid).fromHeader(op_h);
             if (cqe.res < 0) {
-                ThreadPool.waitPidErrorFromErrno(
-                    @as(isize, @intCast(cqe.res)),
-                ) catch |err| {
+                ThreadPool.waitPidErrorFromErrno(errno(cqe.res)) catch |err| {
                     switch (err) {
                         error.SignalInterrupt => unreachable,
                         else => |e| op.data.result = e,
@@ -287,8 +286,9 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
     op_h.callback(@ptrCast(self), @ptrCast(op_h));
 }
 
-fn errno(err_code: i32) linux.E {
-    return posix.errno(@as(isize, @intCast(err_code)));
+fn errno(rc: i32) linux.E {
+    const int = if (rc > -4096 and rc < 0) -rc else 0;
+    return @enumFromInt(int);
 }
 
 pub const Options = struct {

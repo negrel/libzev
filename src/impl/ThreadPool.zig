@@ -246,17 +246,23 @@ fn doOpenat(op: *Op(io.OpenAt)) void {
         .CLOEXEC = true,
     };
 
-    op.data.result = openAtErrorFromPosixErrno(openat_sym(
+    const rc = openat_sym(
         d.dir.fd,
         path[0..],
         flags,
         d.mode,
-    ));
+    );
+    openAtErrorFromPosixE(posix.errno(rc)) catch |err| {
+        op.data.result = err;
+        return;
+    };
+
+    op.data.result = .{ .handle = @intCast(rc) };
 }
 
-pub fn openAtErrorFromPosixErrno(rc: anytype) io.OpenAt.Error!std.fs.File {
-    if (rc > 0) return .{ .handle = @as(std.fs.File.Handle, @intCast(rc)) };
-    return switch (posix.errno(rc)) {
+pub fn openAtErrorFromPosixE(e: posix.E) io.OpenAt.Error!void {
+    return switch (e) {
+        .SUCCESS => {},
         .ACCES => error.AccessDenied,
         .AGAIN => error.WouldBlock,
         .BADF => error.InvalidDirFd,
@@ -292,14 +298,14 @@ pub fn openAtErrorFromPosixErrno(rc: anytype) io.OpenAt.Error!std.fs.File {
 }
 
 fn doClose(op: *Op(io.Close)) void {
-    op.data.result = closeErrorFromPosixErrno(
-        system.close(op.data.file.handle),
-    );
+    const rc =
+        system.close(op.data.file.handle);
+    op.data.result = closeErrorFromPosixE(posix.errno(rc));
 }
 
-pub fn closeErrorFromPosixErrno(rc: anytype) io.Close.Error!void {
-    if (rc >= 0) return;
-    return switch (posix.errno(rc)) {
+pub fn closeErrorFromPosixE(e: posix.E) io.Close.Error!void {
+    return switch (e) {
+        .SUCCESS => {},
         .BADF => error.BadFd,
         .INTR => error.SignalInterrupt,
         .IO => error.InputOutput,
@@ -327,12 +333,16 @@ fn doPRead(op: *Op(io.PRead)) void {
         );
     }
 
-    op.data.result = preadErrorFromPosixErrno(rc);
+    preadErrorFromPosixE(posix.errno(rc)) catch |err| {
+        op.data.result = err;
+        return;
+    };
+    op.data.result = @intCast(rc);
 }
 
-pub fn preadErrorFromPosixErrno(rc: anytype) io.PRead.Error!usize {
-    return switch (posix.errno(rc)) {
-        .SUCCESS => @intCast(rc),
+pub fn preadErrorFromPosixE(e: posix.E) io.PRead.Error!void {
+    return switch (e) {
+        .SUCCESS => {},
         .AGAIN => error.WouldBlock,
         .BADF => error.BadFd,
         .FAULT => error.ParamsOutsideAccessibleAddressSpace,
@@ -366,12 +376,16 @@ fn doPWrite(op: *Op(io.PWrite)) void {
         );
     }
 
-    op.data.result = pwriteErrorFromPosixErrno(rc);
+    pwriteErrorFromPosixE(posix.errno(rc)) catch |err| {
+        op.data.result = err;
+        return;
+    };
+    op.data.result = rc;
 }
 
-pub fn pwriteErrorFromPosixErrno(rc: anytype) io.PWrite.Error!usize {
-    return switch (posix.errno(rc)) {
-        .SUCCESS => @intCast(rc),
+pub fn pwriteErrorFromPosixE(e: posix.E) io.PWrite.Error!void {
+    return switch (e) {
+        .SUCCESS => {},
         .AGAIN => error.WouldBlock,
         .BADF => error.BadFd,
         // Should never happen, we only write to file.
@@ -394,11 +408,11 @@ pub fn pwriteErrorFromPosixErrno(rc: anytype) io.PWrite.Error!usize {
 
 fn doFSync(op: *Op(io.FSync)) void {
     const rc = system.fsync(op.data.file.handle);
-    op.data.result = fsyncErrorFromPosixErrno(rc);
+    op.data.result = fsyncErrorFromPosixE(posix.errno(rc));
 }
 
-pub fn fsyncErrorFromPosixErrno(rc: anytype) io.FSync.Error!void {
-    return switch (posix.errno(rc)) {
+pub fn fsyncErrorFromPosixE(e: posix.E) io.FSync.Error!void {
+    return switch (e) {
         .SUCCESS => {},
         .BADF => error.BadFd,
         .INTR => error.SignalInterrupt,
@@ -416,15 +430,15 @@ fn doFStat(op: *Op(io.FStat)) void {
 
     var stat: posix.Stat = undefined;
     const rc = fstat_sym(op.data.file.handle, &stat);
-    fstatErrorFromPosixErrno(rc) catch |err| {
+    fstatErrorFromPosixE(posix.errno(rc)) catch |err| {
         op.data.result = err;
         return;
     };
     op.data.result = .fromPosix(stat);
 }
 
-pub fn fstatErrorFromPosixErrno(rc: anytype) io.FStat.Error!void {
-    return switch (posix.errno(rc)) {
+pub fn fstatErrorFromPosixE(e: posix.E) io.FStat.Error!void {
+    return switch (e) {
         .SUCCESS => {},
         .BADF => error.BadFd,
         .FAULT => error.BadAddress,
@@ -532,18 +546,14 @@ fn doUnlinkAt(op: *Op(io.UnlinkAt)) void {
             op.data.result = err;
             return;
         };
-
-        op.data.result = unlinkAtErrorFromErrno(system.unlinkat(
-            op.data.dir.fd,
-            file_path_c[0..],
-            flags,
-        ));
+        const rc = system.unlinkat(op.data.dir.fd, file_path_c[0..], flags);
+        op.data.result = unlinkAtErrorFromErrno(posix.errno(rc));
     }
 }
 
-pub fn unlinkAtErrorFromErrno(rc: anytype) io.UnlinkAt.Error!void {
-    return switch (posix.errno(rc)) {
-        .SUCCESS => return,
+pub fn unlinkAtErrorFromErrno(e: posix.E) io.UnlinkAt.Error!void {
+    return switch (e) {
+        .SUCCESS => {},
         .ACCES => error.AccessDenied,
         .BADF => error.InvalidDirFd,
         .BUSY => error.FileBusy,
@@ -679,7 +689,7 @@ fn doWaitPid(op: *Op(io.WaitPid)) void {
     var status: u32 = undefined;
     while (true) {
         const rc = system.waitpid(op.data.pid, &status, 0);
-        waitPidErrorFromErrno(rc) catch |err| switch (err) {
+        waitPidErrorFromErrno(posix.errno(rc)) catch |err| switch (err) {
             error.SignalInterrupt => continue,
             else => |e| {
                 op.data.result = e;
@@ -693,9 +703,9 @@ fn doWaitPid(op: *Op(io.WaitPid)) void {
 }
 
 pub fn waitPidErrorFromErrno(
-    rc: anytype,
+    e: posix.E,
 ) (io.WaitPid.Error || error{SignalInterrupt})!void {
-    return switch (posix.errno(rc)) {
+    return switch (e) {
         .SUCCESS => {},
         .INTR => error.SignalInterrupt,
         .CHILD => error.NoChild,
@@ -704,8 +714,8 @@ pub fn waitPidErrorFromErrno(
     };
 }
 
-// Queuing and polling sleep operations on a threadpool with 1 thread is faster
-// than sleeping on the main thread.
+// Queuing and polling 0s sleep operations on a threadpool with 1 thread is
+// faster than sleeping on the main thread.
 
 // test "benchmark sleep 0s" {
 //     const Static = struct {
