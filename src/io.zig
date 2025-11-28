@@ -139,7 +139,7 @@ pub const OpenAt = struct {
     dir: fs.Dir,
     path: []const u8,
     options: Options,
-    mode: u9,
+    mode: u32,
 
     result: Error!fs.File = undefined,
 };
