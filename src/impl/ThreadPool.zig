@@ -316,7 +316,7 @@ pub fn closeErrorFromPosixE(e: posix.E) io.Close.Error!void {
 }
 
 fn doPRead(op: *Op(io.PRead)) void {
-    var rc: usize = 0;
+    var rc: isize = 0;
     if (op.data.offset == -1) {
         rc = system.read(
             op.data.file.handle,
@@ -329,7 +329,7 @@ fn doPRead(op: *Op(io.PRead)) void {
             op.data.file.handle,
             op.data.buffer.ptr,
             op.data.buffer.len,
-            op.data.offset,
+            @intCast(op.data.offset),
         );
     }
 
