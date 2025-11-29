@@ -318,19 +318,19 @@ pub fn closeErrorFromPosixE(e: posix.E) io.Close.Error!void {
 fn doPRead(op: *Op(io.PRead)) void {
     var rc: usize = 0;
     if (op.data.offset == -1) {
-        rc = system.read(
+        rc = @intCast(system.read(
             op.data.file.handle,
             op.data.buffer.ptr,
             op.data.buffer.len,
-        );
+        ));
     } else {
         const pread_sym = if (lfs64_abi) system.pread64 else system.pread;
-        rc = pread_sym(
+        rc = @intCast(pread_sym(
             op.data.file.handle,
             op.data.buffer.ptr,
             op.data.buffer.len,
-            op.data.offset,
-        );
+            @intCast(op.data.offset),
+        ));
     }
 
     preadErrorFromPosixE(posix.errno(rc)) catch |err| {
@@ -361,26 +361,26 @@ pub fn preadErrorFromPosixE(e: posix.E) io.PRead.Error!void {
 fn doPWrite(op: *Op(io.PWrite)) void {
     var rc: usize = 0;
     if (op.data.offset == -1) {
-        rc = system.write(
+        rc = @intCast(system.write(
             op.data.file.handle,
             op.data.buffer.ptr,
             op.data.buffer.len,
-        );
+        ));
     } else {
         const pwrite_sym = if (lfs64_abi) system.pwrite64 else system.pwrite;
-        rc = pwrite_sym(
+        rc = @intCast(pwrite_sym(
             op.data.file.handle,
             op.data.buffer.ptr,
             op.data.buffer.len,
-            op.data.offset,
-        );
+            @intCast(op.data.offset),
+        ));
     }
 
     pwriteErrorFromPosixE(posix.errno(rc)) catch |err| {
         op.data.result = err;
         return;
     };
-    op.data.result = rc;
+    op.data.result = @intCast(rc);
 }
 
 pub fn pwriteErrorFromPosixE(e: posix.E) io.PWrite.Error!void {
