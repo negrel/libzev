@@ -271,7 +271,7 @@ pub const FStat = struct {
 
     file: fs.File,
 
-    result: Error!std.fs.File.Stat = undefined,
+    result: Error!Stat = undefined,
 };
 
 pub const GetCwd = struct {
