@@ -686,7 +686,9 @@ pub fn posixSpawn(data: *io.Spawn) io.Spawn.Error!io.Spawn.Result {
 }
 
 fn doWaitPid(op: *Op(io.WaitPid)) void {
-    var status: u32 = undefined;
+    const Status = if (builtin.link_libc) c_int else u32;
+
+    var status: Status = undefined;
     while (true) {
         const rc = system.waitpid(op.data.pid, &status, 0);
         waitPidErrorFromErrno(posix.errno(rc)) catch |err| switch (err) {
@@ -697,7 +699,7 @@ fn doWaitPid(op: *Op(io.WaitPid)) void {
             },
         };
 
-        op.data.result = status;
+        op.data.result = @intCast(status);
         return;
     }
 }
