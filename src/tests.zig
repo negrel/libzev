@@ -9,7 +9,7 @@ fn forEachAvailableImpl(tcase: anytype) !void {
         const ImplIo = i.Io();
         @call(.auto, tcase, .{ImplIo}) catch |err| {
             switch (err) {
-                error.UnsupportedOp => {
+                error.NotSupported => {
                     // ThreadPool backend MUST support all I/O operations.
                     if (ImplIo != zev.Impl.thread_pool.Io()) {
                         return;

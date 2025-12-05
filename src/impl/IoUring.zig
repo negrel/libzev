@@ -42,14 +42,14 @@ pub fn supports(IoOp: type) bool {
     };
 }
 
-pub fn submit(self: *Io, op: anytype) (error{UnsupportedOp} || anyerror)!void {
+pub fn submit(self: *Io, op: anytype) (error{NotSupported} || anyerror)!void {
     comptime {
         std.debug.assert(
             std.mem.startsWith(u8, @typeName(@TypeOf(op)), "*io.Op("),
         );
     }
 
-    if (!Io.supports(@TypeOf(op))) return error.UnsupportedOp;
+    if (!Io.supports(@TypeOf(op))) return error.NotSupported;
     try self.submitOpHeader(op);
 }
 

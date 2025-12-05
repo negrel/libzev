@@ -30,7 +30,7 @@ pub fn Overlay(Upper: type, Lower: type) type {
         pub fn submit(
             self: *Io,
             op: anytype,
-        ) (error{UnsupportedOp} || anyerror)!void {
+        ) (error{NotSupported} || anyerror)!void {
             comptime {
                 std.debug.assert(
                     std.mem.startsWith(u8, @typeName(@TypeOf(op)), "*io.Op("),
