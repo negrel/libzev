@@ -610,30 +610,25 @@ pub fn posixSpawn(data: *io.Spawn) io.Spawn.Error!io.Spawn.Result {
 
     // Setup a pipe so child can communicate error/success setup before exec().
     const err_pipe = try std.posix.pipe2(.{ .CLOEXEC = true });
-    errdefer {
-        std.posix.close(err_pipe[0]);
-        std.posix.close(err_pipe[1]);
-    }
 
     // Setup pipes if any.
     const stdio: [3]io.Spawn.StdIo = .{ data.stdin, data.stdout, data.stderr };
     var child_pipes: [3]?std.fs.File.Handle = .{ null, null, null };
-    errdefer for (child_pipes) |p| if (p) |fd| std.posix.close(fd);
     inline for (stdio, 0..stdio.len) |s, i| {
         if (s == .pipe) {
             const pipes = try std.posix.pipe2(.{});
             switch (i) {
                 0 => {
-                    result.stdin = .{ .handle = pipes[0] };
-                    child_pipes[0] = pipes[1];
+                    result.stdin = .{ .handle = pipes[1] };
+                    child_pipes[i] = pipes[0];
                 },
                 1 => {
-                    result.stdout = .{ .handle = pipes[1] };
-                    child_pipes[1] = pipes[0];
+                    result.stdout = .{ .handle = pipes[0] };
+                    child_pipes[i] = pipes[1];
                 },
                 2 => {
-                    result.stderr = .{ .handle = pipes[1] };
-                    child_pipes[2] = pipes[0];
+                    result.stderr = .{ .handle = pipes[0] };
+                    child_pipes[i] = pipes[1];
                 },
                 else => unreachable,
             }
@@ -642,7 +637,10 @@ pub fn posixSpawn(data: *io.Spawn) io.Spawn.Error!io.Spawn.Result {
 
     const pid = try std.posix.fork();
     if (pid == 0) { // Child.
-        std.posix.close(err_pipe[0]); // Close read side.
+        // Close parent pipes or child pipes on error.
+        std.posix.close(err_pipe[0]);
+        defer std.posix.close(err_pipe[1]);
+        errdefer for (child_pipes) |p| if (p) |fd| std.posix.close(fd);
 
         var ignore_fd: ?std.posix.fd_t = null;
         for (stdio, 0..stdio.len) |s, i| {
@@ -671,7 +669,10 @@ pub fn posixSpawn(data: *io.Spawn) io.Spawn.Error!io.Spawn.Result {
         Static.reportChildError(err_pipe[1], err);
         std.posix.exit(0);
     } else { // Parent.
-        std.posix.close(err_pipe[1]); // Close write side.
+        // Close child pipes.
+        std.posix.close(err_pipe[1]);
+        for (child_pipes) |p| if (p) |fd| std.posix.close(fd);
+        defer std.posix.close(err_pipe[0]);
 
         result.pid = pid;
 
