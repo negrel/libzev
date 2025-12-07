@@ -170,6 +170,7 @@ pub fn OpPrivateData(T: type) type {
                 .unlinkat => doUnlinkAt(op),
                 .spawn => doSpawn(op),
                 .waitpid => doWaitPid(op),
+                .pipe => doPipe(op),
             }
         }
     };
@@ -188,6 +189,7 @@ pub const chDir = io.opInitOf(Io, io.ChDir);
 pub const unlinkAt = io.opInitOf(Io, io.UnlinkAt);
 pub const spawn = io.opInitOf(Io, io.Spawn);
 pub const waitPid = io.opInitOf(Io, io.WaitPid);
+pub const pipe = io.opInitOf(Io, io.Pipe);
 
 const lfs64_abi = builtin.os.tag == .linux and
     builtin.link_libc and
@@ -715,6 +717,27 @@ pub fn waitPidErrorFromErrno(
         // .INVAL => unreachable, // Invalid flags.
         else => |err| posix.unexpectedErrno(err),
     };
+}
+
+fn doPipe(op: *Op(io.Pipe)) void {
+    var fds: [2]std.posix.fd_t = undefined;
+    const rc = system.pipe(&fds);
+    pipeErrorFromErrno(posix.errno(rc)) catch |err| {
+        op.data.result = err;
+        return;
+    };
+    op.data.result = @bitCast(fds);
+}
+
+pub fn pipeErrorFromErrno(e: posix.E) io.Pipe.Error!void {
+    switch (e) {
+        .SUCCESS => {},
+        // .INVAL => unreachable, // pipe2() only.
+        // .FAULT => unreachable, // Invalid fds pointer.
+        .NFILE => return error.SystemFdQuotaExceeded,
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        else => |err| return posix.unexpectedErrno(err),
+    }
 }
 
 // Queuing and polling 0s sleep operations on a threadpool with 1 thread is

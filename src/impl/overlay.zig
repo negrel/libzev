@@ -140,5 +140,6 @@ pub fn Overlay(Upper: type, Lower: type) type {
         pub const unlinkAt = opInitOf(io.UnlinkAt);
         pub const spawn = opInitOf(io.Spawn);
         pub const waitPid = opInitOf(io.WaitPid);
+        pub const pipe = opInitOf(io.Pipe);
     };
 }

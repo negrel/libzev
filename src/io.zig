@@ -19,6 +19,7 @@ pub const OpCode = enum {
     unlinkat,
     spawn,
     waitpid,
+    pipe,
 
     pub fn Data(self: @This()) type {
         return switch (self) {
@@ -35,6 +36,7 @@ pub const OpCode = enum {
             .unlinkat => UnlinkAt,
             .spawn => Spawn,
             .waitpid => WaitPid,
+            .pipe => Pipe,
         };
     }
 };
@@ -386,6 +388,20 @@ pub const WaitPid = struct {
     pid: std.process.Child.Id,
 
     result: Error!u32 = undefined,
+};
+
+pub const Pipe = struct {
+    pub const op_code = OpCode.pipe;
+
+    pub const Error = error{
+        BadAddress,
+        InvalidSyscallParameters,
+        ProcessFdQuotaExceeded,
+        SystemFdQuotaExceeded,
+        Unexpected,
+    };
+
+    result: Error![2]fs.File = undefined,
 };
 
 pub fn opInitOf(Io: type, T: type) OpConstructor(Io, T) {

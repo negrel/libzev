@@ -37,7 +37,7 @@ pub fn deinit(self: *Io) void {
 /// Supports returns whether given operation is supported.
 pub fn supports(IoOp: type) bool {
     return switch (IoOp) {
-        *Op(io.GetCwd), *Op(io.ChDir), *Op(io.Spawn) => false,
+        *Op(io.GetCwd), *Op(io.ChDir), *Op(io.Spawn), *Op(io.Pipe) => false,
         else => std.mem.startsWith(u8, @typeName(IoOp), "*io.Op(impl.IoUring"),
     };
 }
@@ -268,19 +268,16 @@ fn processCompletion(self: *Io, cqe: *linux.io_uring_cqe) void {
         .spawn => unreachable,
         .waitpid => {
             const op = Op(io.WaitPid).fromHeader(op_h);
-            if (cqe.res < 0) {
-                ThreadPool.waitPidErrorFromErrno(errno(cqe.res)) catch |err| {
-                    switch (err) {
-                        error.SignalInterrupt => unreachable,
-                        else => |e| op.data.result = e,
-                    }
-                    return;
-                };
-                unreachable;
-            } else {
+            if (ThreadPool.waitPidErrorFromErrno(errno(cqe.res))) {
                 op.data.result = @intCast(cqe.res);
+            } else |err| {
+                switch (err) {
+                    error.SignalInterrupt => unreachable,
+                    else => |e| op.data.result = e,
+                }
             }
         },
+        .pipe => unreachable,
     }
 
     op_h.callback(@ptrCast(self), @ptrCast(op_h));
@@ -337,3 +334,4 @@ pub const chDir = io.opInitOf(Io, io.ChDir);
 pub const unlinkAt = io.opInitOf(Io, io.UnlinkAt);
 pub const spawn = io.opInitOf(Io, io.Spawn);
 pub const waitPid = io.opInitOf(Io, io.WaitPid);
+pub const pipe = io.opInitOf(Io, io.Pipe);

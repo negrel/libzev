@@ -23,6 +23,7 @@ pub const ChDir = io.ChDir;
 pub const UnlinkAt = io.UnlinkAt;
 pub const Spawn = io.Spawn;
 pub const WaitPid = io.WaitPid;
+pub const Pipe = io.Pipe;
 
 pub const OpHeader = io.OpHeader;
 pub const OpCode = io.OpCode;

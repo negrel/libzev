@@ -502,6 +502,53 @@ test "spawn/wait" {
     }.tcase);
 }
 
+test "pipe" {
+    try forEachAvailableImpl(struct {
+        fn tcase(Io: type) anyerror!void {
+            const Static = struct {
+                var pipeCalled: bool = undefined;
+                var pipe: zev.Pipe.Error![2]std.fs.File = undefined;
+
+                fn pipeCallback(
+                    _: *Io,
+                    op: *Io.Op(zev.Pipe),
+                ) void {
+                    pipeCalled = true;
+                    pipe = op.data.result;
+                }
+            };
+            Static.pipeCalled = false;
+            Static.pipe = undefined;
+
+            var io: Io = .{};
+            try io.init(.{});
+            defer io.deinit();
+
+            // Pipe.
+            {
+                var pipe = Io.pipe(.{}, null, Static.pipeCallback);
+
+                try io.submit(&pipe);
+                _ = try testutils.pollAtLeast(&io, 1, std.time.ns_per_s);
+
+                try std.testing.expect(Static.pipeCalled);
+            }
+
+            const r = (try Static.pipe)[0];
+            const w = (try Static.pipe)[1];
+
+            _ = try w.write("Hello from write side");
+
+            var buf: [4096]u8 = undefined;
+            const read = try r.read(buf[0..]);
+            try std.testing.expectEqualStrings(
+                "Hello from write side",
+                buf[0..read],
+            );
+        }
+    }.tcase);
+}
+
 const testutils = struct {
     fn pollAtLeast(
         io: anytype,
