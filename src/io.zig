@@ -347,18 +347,16 @@ pub const Spawn = struct {
 
     pub const Error = std.process.Child.SpawnError;
 
-    pub const StdIo = enum(c_int) {
+    pub const StdIo = union(enum) {
         /// Inherit the stream from the parent process.
-        inherit,
+        inherit: void,
         /// Pass a null stream to the child process. This is /dev/null on POSIX
         /// and NUL on Windows.
-        ignore,
-        /// Create a pipe for the stream. The corresponding field (stdout,
-        /// stderr, or stdin) will be assigned a File object that can be used to
-        /// read from or write to the pipe.
-        pipe,
+        ignore: void,
+        /// Use file as a stream.
+        file: fs.File,
         /// Close the stream after the child process spawns.
-        close,
+        close: void,
     };
 
     pub const Result = struct {
